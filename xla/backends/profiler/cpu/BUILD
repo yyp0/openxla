@@ -1,0 +1,115 @@
+load("@tsl//tsl/platform:rules_cc.bzl", "cc_library")
+load("@tsl//tsl/profiler/builds:build_config.bzl", "tf_profiler_copts")
+
+# copybara:uncomment package(default_applicable_licenses = ["//tensorflow:license"])
+
+cc_library(
+    name = "host_tracer",
+    srcs = ["host_tracer_factory.cc"],
+    visibility = [
+        "//xla/backends/profiler:__pkg__",
+        # copybara:uncomment "//tensorflow/core/profiler:internal",
+    ],
+    deps = [
+        ":host_tracer_impl",
+        "@tsl//tsl/profiler/lib:profiler_factory",
+        "@tsl//tsl/profiler/protobuf:profiler_options_proto_cc",
+    ],
+    alwayslink = True,
+)
+
+cc_library(
+    name = "host_tracer_impl",
+    srcs = ["host_tracer.cc"],
+    hdrs = ["host_tracer.h"],
+    copts = tf_profiler_copts(),
+    visibility = [
+        # copybara:uncomment "//tensorflow/core/profiler:internal",
+    ],
+    deps = [
+        "@tsl//tsl/platform:errors",
+        "@tsl//tsl/platform:status",
+        "@tsl//tsl/platform:types",
+        "@tsl//tsl/profiler/backends/cpu:host_tracer_utils",
+        "@tsl//tsl/profiler/backends/cpu:traceme_recorder",
+        "@tsl//tsl/profiler/lib:profiler_interface",
+        "@tsl//tsl/profiler/protobuf:xplane_proto_cc",
+        "@tsl//tsl/profiler/utils:time_utils",
+        "@tsl//tsl/profiler/utils:xplane_schema",
+        "@tsl//tsl/profiler/utils:xplane_utils",
+    ],
+)
+
+cc_library(
+    name = "python_tracer",
+    srcs = ["python_tracer_factory.cc"],
+    visibility = [
+        "//xla/python:__pkg__",
+        # copybara:uncomment "//tensorflow/core/profiler:internal",
+    ],
+    deps = [
+        ":python_tracer_impl",
+        "@tsl//tsl/profiler/lib:profiler_factory",
+        "@tsl//tsl/profiler/protobuf:profiler_options_proto_cc",
+    ],
+    alwayslink = True,
+)
+
+cc_library(
+    name = "python_tracer_impl",
+    srcs = ["python_tracer.cc"],
+    hdrs = ["python_tracer.h"],
+    copts = tf_profiler_copts() + ["-fexceptions"],
+    features = ["-use_header_modules"],
+    visibility = [
+        # copybara:uncomment "//tensorflow/core/profiler:internal",
+    ],
+    deps = [
+        "//xla/python/profiler/internal:python_hooks",
+        "@tsl//tsl/platform:errors",
+        "@tsl//tsl/platform:logging",
+        "@tsl//tsl/platform:macros",
+        "@tsl//tsl/platform:status",
+        "@tsl//tsl/profiler/lib:profiler_interface",
+        "@tsl//tsl/profiler/protobuf:xplane_proto_cc",
+    ],
+)
+
+cc_library(
+    name = "metadata_collector",
+    srcs = ["metadata_collector.cc"],
+    copts = tf_profiler_copts(),
+    visibility = [
+        "//xla/backends/profiler:__pkg__",
+        # copybara:uncomment "//tensorflow/core/profiler:internal",
+    ],
+    deps = [
+        ":metadata_utils",
+        "//xla/service:hlo_proto_cc",
+        "//xla/service:xla_debug_info_manager",
+        "@tsl//tsl/platform:macros",
+        "@tsl//tsl/platform:status",
+        "@tsl//tsl/profiler/lib:profiler_factory",
+        "@tsl//tsl/profiler/lib:profiler_interface",
+        "@tsl//tsl/profiler/protobuf:profiler_options_proto_cc",
+        "@tsl//tsl/profiler/protobuf:xplane_proto_cc",
+        "@tsl//tsl/profiler/utils:xplane_schema",
+        "@tsl//tsl/profiler/utils:xplane_utils",
+    ],
+    alwayslink = True,
+)
+
+cc_library(
+    name = "metadata_utils",
+    hdrs = ["metadata_utils.h"],
+    visibility = [
+        # copybara:uncomment "//tensorflow/core/profiler:internal",
+    ],
+    deps = [
+        "//xla/service:hlo_proto_cc",
+        "@tsl//tsl/profiler/convert:xla_op_utils",
+        "@tsl//tsl/profiler/protobuf:xplane_proto_cc",
+        "@tsl//tsl/profiler/utils:xplane_builder",
+        "@tsl//tsl/profiler/utils:xplane_schema",
+    ],
+)
