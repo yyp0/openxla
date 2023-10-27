@@ -63,6 +63,15 @@ typedef std::function<StatusOr<HloSchedule>(
 ModuleSchedulerAlgorithm ComputationSchedulerToModuleScheduler(
     const MemorySchedulerAlgorithm&, const MemorySchedulerPostprocessor& = {});
 
+// Roam Scheduler
+Status RoamMemoryScheduler(
+    HloComputation* computation,
+    const TuplePointsToAnalysis& points_to_analysis,
+    const HloAliasAnalysis& alias_analysis,
+    const BufferValue::SizeFunction& size_function,
+    const absl::flat_hash_map<const HloComputation*, int64_t>&
+        memory_by_computation);
+
 // List scheduler
 StatusOr<HloInstructionSequence> ListMemoryScheduler(
     HloComputation* computation,

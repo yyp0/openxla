@@ -44,6 +44,259 @@ namespace {
 
 using ::tsl::strings::HumanReadableNumBytes;
 
+
+class RoamScheduler {
+  public:
+    static Status Run(
+        HloComputation* computation,
+        const TuplePointsToAnalysis& points_to_analysis,
+        const BufferValue::SizeFunction& size_function,
+        const absl::flat_hash_map<const HloComputation*, int64_t>&
+            memory_by_computation) {
+      RoamScheduler scheduler(computation, points_to_analysis, size_function, 
+                              memory_by_computation);
+
+      // return scheduler.CreateSchedule();
+      TF_CHECK_OK(scheduler.SearchMemoryInsensitivePoints());
+      return OkStatus();
+    }
+
+  private:
+    RoamScheduler(HloComputation* computation,
+                  const TuplePointsToAnalysis& points_to_analysis,
+                  const BufferValue::SizeFunction& size_function,
+                  const absl::flat_hash_map<const HloComputation*, int64_t>& 
+                    memory_by_computation)
+        : computation_(computation),
+          points_to_analysis_(points_to_analysis),
+          size_function_(size_function),
+          memory_by_computation_(memory_by_computation) {
+      int tmp = 0;
+    }
+    
+    HloComputation* computation_;
+    const TuplePointsToAnalysis& points_to_analysis_;
+    const BufferValue::SizeFunction& size_function_;
+    const absl::flat_hash_map<const HloComputation*, int64_t> memory_by_computation_;
+
+    // Compute ASAP time of nodes.
+    int64_t ComputeASAPTime(HloInstruction*);
+
+    // Compute ALAP time of nodes.
+    int64_t ComputeALAPTime(HloInstruction*);
+
+    // Update memory_insensitive_points_.
+    Status SearchMemoryInsensitivePoints();
+
+    // Generate subgraph information.
+    Status GraphDecomposition();
+
+    // Update unique_id_hlo_instruction_, mul_, dependencies_.
+    Status ExtractSubgraphInformation();
+    
+    HloInstructionSequence CreateSchedule();
+    
+    // ASAP and ALAP time of all instructions.
+    absl::flat_hash_map<HloInstruction*, int64_t> asap;
+    absl::flat_hash_map<HloInstruction*, int64_t> alap;
+
+    // All memory insensitive points in the computation.
+    // std::vector<HloInstruction*> memory_insensitive_points_;
+    std::vector<std::tuple<int64_t, HloInstruction*>> memory_insensitive_points_;   
+    // absl::flat_hash_map<int64_t, HloInstruction*> memory_insensitive_points_;
+
+    // Graph decomposition points.
+    std::vector<std::tuple<int64_t, HloInstruction*>> decompositions_;
+
+    // Number of nodes in each subgraph.
+    int64_t NUM_NODES;
+    
+    // Unique id of hlo instruction in each subgraph.
+    std::vector<absl::flat_hash_map<int64_t, HloInstruction*>> unique_id_hlo_instruction_;
+    
+    // MUL information of all subgraphs in the computation.
+    // Subgraph => Hlo instruction => MUL.
+    // Eg. For the first hlo instruction in the first subgraph, its MUL is:
+    //     (mul_[0][0][0], mul_[0][0][1])
+    std::vector<std::vector<std::vector<int>>> mul_;
+    
+    // Dependencies in each subgraph.
+    // The dependencies in a single subgraph can be represented as a two-dimensional matrix,
+    // Eg. dependencies_[0] describes the dependencies in the first subgraph,
+    //     dependencies[0][i][j] = 0 means i is the precedency of j,
+    //                           = 1 means i is the successor of j,
+    //                           = 2 means i is the brother of j. 
+    std::vector<std::vector<std::vector<int>>> dependencies_;
+};
+
+Status RoamScheduler::GraphDecomposition() {
+  std::sort(memory_insensitive_points_.begin(), memory_insensitive_points_.end());
+
+  int64_t left = 0, right = 0;
+  while (right < memory_insensitive_points_.size()) {
+    int64_t left_ts;
+    HloInstruction* left_instruction;
+    std::tie(left_ts, left_instruction) = memory_insensitive_points_[left];
+    int64_t right_ts;
+    HloInstruction* right_instruction;
+    std::tie(right_ts, right_instruction) = memory_insensitive_points_[right];
+
+    if (right_ts - left_ts - 1< NUM_NODES) {
+      ++right;
+    } else {
+      if (right - left <= 1) {
+        decompositions_.push_back(memory_insensitive_points_[right]);
+        left = right;
+      } else {
+        decompositions_.push_back(memory_insensitive_points_[right - 1]);
+        left = right - 1;
+      }
+    }
+  }
+
+  return OkStatus();
+} 
+
+Status RoamScheduler::ExtractSubgraphInformation() {
+  /*
+    Get buffers according to instruction:
+      [1] defined buffer: points_to_analysis_.GetBuffersDefinedByInstruction(instruction)
+      [2] used buffer: 
+        std::vector<std::vector<const LogicalBuffer*>> instr_used_buffers;
+        absl::flat_hash_set<const LogicalBuffer*> used_buffers;
+        operands = instruction->operands();
+        for operand in operands:
+          points_to_analysis.GetPointsToSet(operand).ForEachElement(   // Get the source of the outputs of the instruction.
+            [&](const ShapeIndex& ,
+                const PointsToSet::BufferList& buffers) {
+                  used_buffer.insert(buffers.begin(), buffers.end());
+                })
+        instr_used_buffer[instruction] = std::vector<const LogicalBuffer*>(
+            used_buffer.begin(), used_buffer.end());
+  
+    Get instruction from LogicalBuffer:
+      [1] Get the instruction that defines the buffer:  
+        HloInstruction: source_instr = logical_buffer->instruction();
+      [2] 
+    
+
+    Need to record:
+      [1] Lifetime information1: Logical Buffers' MUL;
+      [2] Lifetime information2: Logical Buffers' MustAlived, (asap[e.source], min alap[e.sinks]);
+      [3] The dependencies between any pairs of Logical Buffers.
+
+
+  */
+  
+
+}
+
+// Need to be optimized.
+int64_t RoamScheduler::ComputeASAPTime(HloInstruction* instruction) {
+  absl::flat_hash_set<HloInstruction*> traversed;
+  std::vector<HloInstruction*> BFS = {instruction};
+  
+  while (BFS.size() > 0) {
+    HloInstruction* top = BFS.back();
+    BFS.pop_back();
+    if (traversed.find(top) != traversed.end()) {
+      continue;
+    }
+    traversed.emplace(top);
+    
+    // Need to take control_precedence and control_successors.
+    auto operands = top->operands();
+    for (auto instr : operands) {
+      BFS.push_back(instr);
+    } 
+
+  }
+
+  return traversed.size();
+}
+
+int64_t RoamScheduler::ComputeALAPTime(HloInstruction* instruction) {
+  absl::flat_hash_set<HloInstruction*> traversed;
+  std::vector<HloInstruction*> BFS = {instruction};
+
+  while(BFS.size() > 0) {
+    HloInstruction* top = BFS.back();
+    BFS.pop_back();
+    if (traversed.find(top) != traversed.end()) {
+      continue;
+    }
+    traversed.emplace(top);
+
+    std::vector<HloInstruction*> users = top->users();
+    for (auto instr : users) {
+      BFS.push_back(instr);
+    }
+  }
+
+  return BFS.size();
+}
+
+Status RoamScheduler::SearchMemoryInsensitivePoints() {
+  /*
+  std::vector<HloInstruction*> start_instructions;
+  for (auto* instruction : computation_->instructions()) {
+    if (instruction->operands().empty() &&
+        instruction->control_predecessors().empty()) {
+      start_instructions.emplace_back(instruction);
+    }
+  }
+
+  std::vector<HloInstruction*> end_instructions;
+  for (auto* instruction : computation_->instructions()) {
+    if (instruction-> ) {     // end_instruction
+      end_instructions.emplace_back(instruction);
+    }
+  }
+
+  // Compute asap time for instructions.
+  absl::flat_hash_map<HloInstruction*, int64_t> asap;
+  for (auto instruction : start_instructions) {
+    TF_CHECK_OK(ComputeASAPTime());
+  }
+    
+  // Compute alpa time for instructions.
+  absl::flat_hash_map<HloInstruction*, int64_t> alap;
+  for (auto instruction : end_instructions) {
+    TF_CHECK_OK(ComputeALAPTime(alap));
+  }
+  */
+
+  // Compute asap/alap time for instructions.
+  for (auto instruction : computation_->instructions()) {
+    asap[instruction] = ComputeASAPTime(instruction);
+    alap[instruction] = ComputeALAPTime(instruction);
+  }
+
+  for (auto instruction : computation_->instructions()) {
+
+
+    if (asap[instruction] == alap[instruction]) {
+      memory_insensitive_points_.emplace_back(asap[instruction], instruction);
+      // memory_insensitive_points_[instruction] = asap[instruction];
+    }
+  }
+
+  return OkStatus();
+}
+
+Status RoamMemoryScheduler(
+    HloComputation* computation,
+    const TuplePointsToAnalysis& points_to_analysis,
+    const HloAliasAnalysis& alias_analysis,
+    const BufferValue::SizeFunction& size_function,
+    const absl::flat_hash_map<const HloComputation*, int64_t>&
+        memory_by_computation) {
+  TF_CHECK_OK(RoamScheduler::Run(computation, points_to_analysis,
+                                size_function, memory_by_computation));
+  
+  return OkStatus();
+}
+
 // Class implementing a list scheduler of HLO instructions which produces a
 // sequence which minimizes memory usage by preferring to schedule the node that
 // frees bigger buffer and defines smaller outputs.
