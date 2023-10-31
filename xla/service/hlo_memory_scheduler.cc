@@ -97,8 +97,8 @@ class RoamScheduler {
     HloInstructionSequence CreateSchedule();
     
     // ASAP and ALAP time of all instructions.
-    absl::flat_hash_map<HloInstruction*, int64_t> asap;
-    absl::flat_hash_map<HloInstruction*, int64_t> alap;
+    absl::flat_hash_map<HloInstruction*, int64_t> asap_;
+    absl::flat_hash_map<HloInstruction*, int64_t> alap_;
 
     // All memory insensitive points in the computation.
     // std::vector<HloInstruction*> memory_insensitive_points_;
@@ -111,21 +111,22 @@ class RoamScheduler {
     // Number of nodes in each subgraph.
     int64_t NUM_NODES;
     
-    // Unique id of hlo instruction in each subgraph.
-    std::vector<absl::flat_hash_map<int64_t, HloInstruction*>> unique_id_hlo_instruction_;
+    // Unique id of LogicalBuffer in each subgraph.
+    std::vector<absl::flat_hash_map<LogicalBuffer*, int64_t>> unique_id_logical_buffer_;
     
     // MUL information of all subgraphs in the computation.
     // Subgraph => Hlo instruction => MUL.
     // Eg. For the first hlo instruction in the first subgraph, its MUL is:
-    //     (mul_[0][0][0], mul_[0][0][1])
-    std::vector<std::vector<std::vector<int>>> mul_;
+    //     (mul_[0][0][0], mul_[0][0][1], mul_[0][0][2], mul_[0][0][3])
+    // (asap_src, alap_src, asap_dst, alap_dst)
+    std::vector<std::vector<std::vector<int>(4, -1)>> mul_;
     
     // Dependencies in each subgraph.
     // The dependencies in a single subgraph can be represented as a two-dimensional matrix,
     // Eg. dependencies_[0] describes the dependencies in the first subgraph,
-    //     dependencies[0][i][j] = 0 means i is the precedency of j,
-    //                           = 1 means i is the successor of j,
-    //                           = 2 means i is the brother of j. 
+    //     dependencies[0][i][j] = 1 means i is the precedency of j,
+    //                           = 2 means i is the successor of j,
+    //                           = 3 means i is the brother of j. 
     std::vector<std::vector<std::vector<int>>> dependencies_;
 };
 
@@ -184,11 +185,137 @@ Status RoamScheduler::ExtractSubgraphInformation() {
       [1] Lifetime information1: Logical Buffers' MUL;
       [2] Lifetime information2: Logical Buffers' MustAlived, (asap[e.source], min alap[e.sinks]);
       [3] The dependencies between any pairs of Logical Buffers.
-
-
   */
   
+  if (decompositions_.size() == 0) {
+    VLOG(1) << "There is no memory-insensitive points in current graph.";
+    return OkStatus();
+  }
+  
+  int64_t graph_id = 0;
+  int64_t last_time = 0;
+  for (auto division : decompositions_) {
+    std::vector<HloInstruction*> BFS = {division};
+    absl::flat_hash_set<HloInstruction*> traversed;
+    int64_t buffer_id = 0;
+    while (BFS.size() > 0) {
+      HloInstruction* curr_instr = BFS.back();
+      BFS.pop_back();
 
+      if (traversed.find(curr_instr) != traversed.end()) {
+        continue;
+      }
+      traversed.emplace(curr_instr);
+
+      int64_t asap_curr = asap_[curr_instr];
+      int64_t alap_curr = alap_[curr_instr];
+
+      // Get defined buffers.
+      auto defined_buffers = points_to_analysis_.GetBuffersDefinedByInstruction(curr_instr);
+      int64_t last_out_buffer_id = -1;
+      for (auto out_buffer : defined_buffers) {
+        if (last_out_buffer_id == -1) {
+          continue;
+        }
+
+        if (unique_id_logical_buffer_[graph_id].find(out_buffer)
+            == unique_id_logical_buffer_[graph_id].end()) {
+          unique_id_logical_buffer_[graph_id][out_buffer] = buffer_id++;
+          last_out_buffer_id = buffer_id - 1;
+        }
+
+        int64_t curr_out_buffer_id = unique_id_logical_buffer_[graph_id][out_buffer];
+        dependencies_[graph_id][last_out_buffer_id][curr_out_buffer_id] = 3;
+        dependencies_[graph_id][curr_out_buffer_id][last_out_buffer_id] = 3;
+      }
+
+      // Get input of current instruction.
+      points_to_analysis_.GetPointsToSet(curr_instr).ForEachElement(
+        [&](const shapeIndex&,
+            const PointsToSet::BufferList& buffers) {
+              for (auto buffer : buffers) {
+                unique_id_logical_buffer_[graph_id][buffer] = buffer_id;
+                // src of the buffer.
+                HloInstruction* src_instr = buffer->instruction();
+                int64_t asap_src = asap_[src_instr];
+                int64_t alap_src = alap_[src_instr];
+                mul_[graph_id][buffer_id][0] = asap_src;
+                mul_[graph_id][buffer_id][1] = alap_src;
+
+                mul_[graph_id][buffer_id][2] = std::min(mul_[graph_id][buffer_id][2], 
+                                                        asap_curr);
+                mul_[graph_id][buffer_id][3] = std::max(mul_[graph_id][buffer_id][2], 
+                                                        alap_curr);      
+                
+                int64_t in_buffer_id = buffer_id;
+                for (auto out_buffer : defined_buffers) {
+                  int64_t out_buffer_id = unique_id_logical_buffer_[graph_id][out_buffer]
+                  // Add predecency.
+                  dependencies_[graph_id][in_buffer_id][out_buffer_id] = 1;
+                  // Add successor.
+                  dependencies_[graph_id][out_buffer_id][in_buffer_id] = 2;
+                }                              
+                ++buffer_id;
+              }
+            }
+      )
+
+      auto operands = curr_instr->operands();
+      for (auto operand : operands) {
+        if (asap_[operand] > last_time) {
+          BFS.push_back(operand);
+        }
+      }
+    }
+
+    last_time = asap_[division];
+    ++graph_id;
+  }
+
+  // Deal with last subgraph.
+  HloInstruction* last_point = decompositions_.back();
+  std::vector<HloInstruction*> BFS = {last_point};
+  absl::flat_hash_set<HloInstruction*> traversed;
+  int64_t buffer_id = 0;
+  while (BFS.size() > 0) {
+    HloInstruction* curr_instr = BFS.back();
+    if (traversed.find(curr_instr) != traversed.end()) {
+      continue;
+    }
+    traversed.emplace(curr_instr);
+    int64_t asap_curr = asap_[curr_instr];
+    int64_t alap_curr = alap_[curr_instr];
+
+    auto defined_buffers = points_to_analysis_.GetBuffersDefinedByInstruction(curr_instr);
+    for (auto buffer : defined_buffers) {
+      unique_id_logical_buffer_[graph_id][buffer] = buffer_id;
+      mul_[graph_id][buffer_id][0] = asap_curr;
+      mul_[graph_id][buffer_id][1] = alap_curr; 
+    }
+
+    points_to_analysis_.GetPointsToSet(curr_instr).ForEachElement(
+      [&](const ShapeIndex&,
+          const PointsToSet::BufferList buffers) {
+            for (auto buffer : buffers) {
+              if (unique_id_logical_buffer_[graph_id].find(buffer) 
+                  == unique_id_logical_buffer_[graph_id].end()) {
+                unique_id_logical_buffer_[buffer] = ++buffer_id;
+                mul_[graph_id][buffer_id][3] = std::min(mul_[graph_id][buffer_id][3],
+                                                   asap_curr);
+                mul_[graph_id][buffer_id][4] = std::max(mul_[graph_id][buffer_id][4],
+                                                   alap_curr);
+              }
+            }
+            
+          }
+    );
+
+    // Add the users of curr_instr into BFS.
+    std::vector<HloInstruction*> users = curr_instr->users();
+    BFS.insert(BFS.end(), users.begin(), users.end());
+  }
+
+  return OkStatus();
 }
 
 // Need to be optimized.
@@ -209,7 +336,6 @@ int64_t RoamScheduler::ComputeASAPTime(HloInstruction* instruction) {
     for (auto instr : operands) {
       BFS.push_back(instr);
     } 
-
   }
 
   return traversed.size();
@@ -268,15 +394,15 @@ Status RoamScheduler::SearchMemoryInsensitivePoints() {
 
   // Compute asap/alap time for instructions.
   for (auto instruction : computation_->instructions()) {
-    asap[instruction] = ComputeASAPTime(instruction);
-    alap[instruction] = ComputeALAPTime(instruction);
+    asap_[instruction] = ComputeASAPTime(instruction);
+    alap_[instruction] = ComputeALAPTime(instruction);
   }
 
   for (auto instruction : computation_->instructions()) {
 
 
-    if (asap[instruction] == alap[instruction]) {
-      memory_insensitive_points_.emplace_back(asap[instruction], instruction);
+    if (asap_[instruction] == alap_[instruction]) {
+      memory_insensitive_points_.emplace_back(asap_[instruction], instruction);
       // memory_insensitive_points_[instruction] = asap[instruction];
     }
   }
