@@ -202,6 +202,7 @@ StatusOr<bool> AllGatherBroadcastReorder::Run(
     }
   }
 
+  VLOG(1) << "Finish AllGatherBroadcastReorder pass.";
   return changed;
 }
 

@@ -5077,6 +5077,8 @@ StatusOr<bool> SpmdPartitioner::Run(
   }
 
   TF_RETURN_IF_ERROR(ClearShardingAttributes(module, execution_threads));
+  
+  VLOG(1) << "Finish SpmdPartitioner pass.";
   return changed;
 }
 

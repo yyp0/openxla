@@ -2264,6 +2264,8 @@ StatusOr<bool> CollectivePipeliner::Run(
           << " and transformed instructions: " << transformed_instructions
           << " for pipelining direction: "
           << GetPipelineDirectionString(config_.pipelining_direction);
+  
+  VLOG(1) << "Finish CollectivePipeliner pass.";
   return changed;
 }
 

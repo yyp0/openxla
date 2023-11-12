@@ -111,6 +111,7 @@ StatusOr<bool> ReduceScatterCreator::Run(
     }
   }
 
+  VLOG(1) << "Finish ReduceScatterCreator pass.";
   return changed;
 }
 

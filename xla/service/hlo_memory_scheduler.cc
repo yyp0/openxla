@@ -44,6 +44,316 @@ namespace {
 
 using ::tsl::strings::HumanReadableNumBytes;
 
+class RoamScheduler {
+  public:
+    static Status Run(
+        HloComputation* computation,
+        const TuplePointsToAnalysis& points_to_analysis,
+        const BufferValue::SizeFunction& size_function,
+        const absl::flat_hash_map<const HloComputation*, int64_t>&
+            memory_by_computation) {
+      RoamScheduler scheduler(computation, points_to_analysis, size_function, 
+                              memory_by_computation);
+
+      // return scheduler.CreateSchedule();
+      // TF_CHECK_OK(scheduler.SearchMemoryInsensitivePoints());
+      TF_CHECK_OK(scheduler.ExtractGraphInformation());
+      int64_t meta_size = points_to_analysis.num_logical_buffers();
+
+      VLOG(1) << "Num logical buffers: " << meta_size;
+
+      // Print unique_id of logical buffers.
+      VLOG(1) << "Check unique id of logical buffers";
+      for (auto ele : scheduler.logical_buffer_unique_id_) {
+        VLOG(1) << "Logical buffer: " << ele.first->ToString() 
+                << " id: " << ele.second;
+      }
+
+      // Print MUL information.
+      VLOG(1) << "Check max useful liverange information";
+      for (int i = 0; i < meta_size; ++i) {
+        VLOG(1) << "Buffer id: " << i 
+                << " mul: " 
+                << scheduler.max_useful_liverange_[i][0] << " "
+                << scheduler.max_useful_liverange_[i][1] << " "
+                << scheduler.max_useful_liverange_[i][2] << " "
+                << scheduler.max_useful_liverange_[i][3];
+      }
+
+      // Print data information of the graph.
+      VLOG(1) << "Check dependencies information: ";
+      for (int i = 0; i < meta_size; ++i) {
+        for (int j = 0; j < meta_size; ++j) {
+          std::cout << "\t" << scheduler.dependencies_[i][j] << " ";
+        }
+        std::cout << std::endl;
+      }
+
+      return OkStatus();
+    }
+
+  private:
+    RoamScheduler(HloComputation* computation,
+                  const TuplePointsToAnalysis& points_to_analysis,
+                  const BufferValue::SizeFunction& size_function,
+                  const absl::flat_hash_map<const HloComputation*, int64_t>& 
+                    memory_by_computation)
+        : computation_(computation),
+          points_to_analysis_(points_to_analysis),
+          size_function_(size_function),
+          memory_by_computation_(memory_by_computation) {
+    }
+    
+    HloComputation* computation_;
+    const TuplePointsToAnalysis& points_to_analysis_;
+    const BufferValue::SizeFunction& size_function_;
+    const absl::flat_hash_map<const HloComputation*, int64_t> memory_by_computation_;
+    
+    absl::flat_hash_map<const HloInstruction*, int64_t> asap_;
+    absl::flat_hash_map<const HloInstruction*, int64_t> alap_;
+    std::vector<std::tuple<int64_t, HloInstruction*>> memory_insensitive_points_; 
+
+    absl::flat_hash_map<const LogicalBuffer*, int64_t> logical_buffer_unique_id_;
+    std::vector<std::vector<int64_t>> max_useful_liverange_;
+    std::vector<std::vector<int>> dependencies_;
+
+    // Compute ASAP time of nodes.
+    int64_t ComputeASAPTime(HloInstruction*);
+
+    // Compute ALAP time of nodes.
+    int64_t ComputeALAPTime(HloInstruction*);
+
+    // Update memory_insensitive_points_.
+    Status SearchMemoryInsensitivePoints();
+
+    Status ExtractGraphInformation();
+    
+};
+
+Status RoamScheduler::ExtractGraphInformation() {
+  // Obtain asap/alap time of all instructions.
+  int64_t num_instruction = computation_->instruction_count();
+  for (auto instruction : computation_->instructions()) {
+    if (instruction->opcode() == HloOpcode::kParameter || 
+        instruction->opcode() == HloOpcode::kConstant) {
+      continue;
+    }
+
+    asap_[instruction] = ComputeASAPTime(instruction);
+    alap_[instruction] = num_instruction - ComputeALAPTime(instruction) + 1;
+  
+    VLOG(1) << "HloInstruction " << instruction->ToShortString()
+            << ": asap=" << asap_[instruction]
+            <<  " alap=" << alap_[instruction];
+  }
+
+  // Init max_useful_liverange_ and dependencies_.
+  int64_t meta_size = points_to_analysis_.num_logical_buffers();
+  max_useful_liverange_.resize(meta_size, std::vector<int64_t>(4, -1));
+  dependencies_.resize(meta_size, std::vector<int>(meta_size, 0));
+
+
+  int64_t buffer_id = 0;
+  for (HloInstruction* curr_instr : computation_->instructions()) {
+    absl::flat_hash_set<const LogicalBuffer*> used_buffers;
+    for (auto operand : curr_instr->operands()) {
+      points_to_analysis_.GetPointsToSet(operand).ForEachElement(
+        [&] (const ShapeIndex&,
+            const PointsToSet::BufferList& buffers) {
+              // used_buffers.insert(buffers.begin(), buffers.end());
+              for (auto tmp : buffers) {
+                // used_buffers.push_back(tmp);
+                // VLOG(1) << "Logical buffer: " << tmp->ToString();
+                if (logical_buffer_unique_id_.find(tmp) == 
+                    logical_buffer_unique_id_.end()) {
+                  // logical_buffer_unique_id_[tmp] = buffer_id++;
+                  VLOG(1) << "Assign buffer: " << tmp->ToString() << " with id=" << buffer_id;
+                  logical_buffer_unique_id_[tmp] = buffer_id++;
+                }
+              }
+              used_buffers.insert(buffers.begin(), buffers.end());
+        }
+      );
+    }
+
+    int64_t asap_r, alap_r;
+    asap_r = asap_[curr_instr];
+    alap_r = alap_[curr_instr];
+    for (auto buffer : used_buffers) {
+      int64_t curr_buffer_id = logical_buffer_unique_id_[buffer];
+      
+      // Get source of the logical buffer.
+      HloInstruction* source = buffer->instruction();
+      int64_t asap_l, alap_l;
+      asap_l = asap_[source];
+      alap_l = alap_[source];
+
+      // Update max useful liverange for each buffer.
+      max_useful_liverange_[curr_buffer_id][0] = asap_l;
+      max_useful_liverange_[curr_buffer_id][1] = alap_l;
+      max_useful_liverange_[curr_buffer_id][2] = asap_r;
+      max_useful_liverange_[curr_buffer_id][3] = alap_r; 
+
+      // // Get the predecenies logical buffers.
+      // points_to_analysis_.GetPointsToSet(source).ForEachElement(
+      //   [&] (const ShapeIndex&,
+      //        const PointsToSet::BufferList& pre_buffers) {
+      //         for (const LogicalBuffer* pre_buffer : pre_buffers) {
+      //           if (logical_buffer_unique_id_.find(pre_buffer) == 
+      //               logical_buffer_unique_id_.end()) {
+      //             logical_buffer_unique_id_[pre_buffer] = ++buffer_id;      
+      //           }
+
+      //           int64_t pre_id = logical_buffer_unique_id_[pre_buffer];
+
+      //           if (dependencies_[pre_id][curr_buffer_id] > 0) {
+      //             continue;  
+      //           }
+
+      //           // Is here enough?
+      //           dependencies_[pre_id][curr_buffer_id] = 1;
+      //           dependencies_[curr_buffer_id][pre_id] = 2;
+      //         }
+      //        }
+      // );
+
+      // Get the siblings logical buffers.
+      auto siblings = points_to_analysis_.GetBuffersDefinedByInstruction(source);
+      for (auto sib : siblings) {
+        if (logical_buffer_unique_id_.find(sib) == 
+            logical_buffer_unique_id_.end()) {
+          VLOG(1) << "Assign buffer: " << sib->ToString() << " with id=" << buffer_id;
+          logical_buffer_unique_id_[sib] = buffer_id++;
+        }
+
+        int64_t sib_id = logical_buffer_unique_id_[sib];
+        dependencies_[sib_id][curr_buffer_id] = 3;
+        dependencies_[curr_buffer_id][sib_id] = 3;
+      }
+
+      // Get the succesors logical buffers.
+      auto succesors = points_to_analysis_.GetBuffersDefinedByInstruction(curr_instr);
+      for (auto succ : succesors) {
+        if (logical_buffer_unique_id_.find(succ) == 
+            logical_buffer_unique_id_.end()) {
+          VLOG(1) << "Assign buffer: " << succ->ToString() << " with id=" << buffer_id;
+          logical_buffer_unique_id_[succ] = buffer_id++;
+        }
+
+        int64_t succ_id = logical_buffer_unique_id_[succ];
+        if (succ.instruction() == computation_->root_instruction()) {
+          max_useful_liverange_[succ][0] = asap_[succ.instruction()];
+          max_useful_liverange_[succ][1] = max_useful_liverange_[succ][2]
+                                         = max_useful_liverange_[succ][3]
+                                         = alap_[succ.instruction()];
+        }
+        dependencies_[succ_id][curr_buffer_id] = 2;
+        dependencies_[curr_buffer_id][succ_id] = 1;
+      }
+
+      // ++buffer_id;
+    }
+  }
+
+  return OkStatus();
+}
+
+// Need to be optimized.
+int64_t RoamScheduler::ComputeASAPTime(HloInstruction* instruction) {
+  absl::flat_hash_set<HloInstruction*> traversed;
+  std::vector<HloInstruction*> BFS = {instruction};
+  int64_t traversed_param = 0;
+
+  while (BFS.size() > 0) {
+    HloInstruction* top = BFS.back();
+    BFS.pop_back();
+    if (top->opcode() == HloOpcode::kParameter or \
+        traversed.find(top) != traversed.end()) {
+      continue;
+    }
+    traversed.emplace(top);
+    
+    if (top->opcode() == HloOpcode::kParameter || 
+        top->opcode() == HloOpcode::kConstant) {
+      traversed_param += 1;
+    }
+
+    // Need to take control_precedence and control_successors.
+    auto operands = top->operands();
+    for (auto instr : operands) {
+      BFS.push_back(instr);
+    } 
+  }
+
+  return traversed.size() - traversed_param;
+}
+
+int64_t RoamScheduler::ComputeALAPTime(HloInstruction* instruction) {
+  absl::flat_hash_set<HloInstruction*> traversed;
+  std::vector<HloInstruction*> BFS = {instruction};
+  int64_t traversed_param = 0;
+
+  while(BFS.size() > 0) {
+    HloInstruction* top = BFS.back();
+    BFS.pop_back();
+    if (traversed.find(top) != traversed.end()) {
+      continue;
+    }
+    traversed.emplace(top);
+
+    if (top->opcode() == HloOpcode::kParameter || 
+        top->opcode() == HloOpcode::kConstant) {
+      traversed_param += 1;
+    }
+
+    std::vector<HloInstruction*> users = top->users();
+    for (auto instr : users) {
+      BFS.push_back(instr);
+    }
+  }
+
+  return traversed.size() - traversed_param;
+}
+
+Status RoamScheduler::SearchMemoryInsensitivePoints() {
+  int64_t num_instr = computation_->instruction_count();
+  VLOG(1) << "The total number of instructions in the computation: " << num_instr;
+
+  int64_t total = 0;
+  for (auto instruction : computation_->instructions()) {
+    if (instruction->opcode() == HloOpcode::kParameter || 
+        instruction->opcode() == HloOpcode::kConstant) {
+      continue;
+    }
+    total += 1;
+  }
+  VLOG(1) << "Instruction except parameter: " << total;
+
+  // Compute asap/alap time for instructions.
+  for (auto instruction : computation_->instructions()) {
+    if (instruction->opcode() == HloOpcode::kParameter || 
+        instruction->opcode() == HloOpcode::kConstant) {
+      continue;
+    }
+
+    asap_[instruction] = ComputeASAPTime(instruction);
+    alap_[instruction] = total - ComputeALAPTime(instruction) + 1;
+  
+    VLOG(1) << "HloInstruction " << instruction->ToShortString()
+            << ": asap=" << asap_[instruction]
+            <<  " alap=" << alap_[instruction];
+  }
+   
+  for (auto instruction : computation_->instructions()) {
+    if (asap_[instruction] == alap_[instruction]) {
+      memory_insensitive_points_.emplace_back(asap_[instruction], instruction);
+      // memory_insensitive_points_[instruction] = asap[instruction];
+    }
+  }
+
+  return OkStatus();
+}
+
 // Class implementing a list scheduler of HLO instructions which produces a
 // sequence which minimizes memory usage by preferring to schedule the node that
 // frees bigger buffer and defines smaller outputs.
@@ -566,6 +876,11 @@ StatusOr<HloInstructionSequence> ListMemoryScheduler(
   TF_ASSIGN_OR_RETURN(HloInstructionSequence sequence,
                       ListScheduler::Run(computation, points_to_analysis,
                                          size_function, memory_by_computation));
+  
+  // Test RoamScheduler.
+  TF_CHECK_OK(RoamScheduler::Run(computation, points_to_analysis,
+                                 size_function, memory_by_computation));
+
   if (postprocessor) {
     sequence = postprocessor(sequence);
   }

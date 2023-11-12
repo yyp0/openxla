@@ -548,6 +548,8 @@ StatusOr<bool> SoftmaxRewriterTriton::Run(
        diamond_chain != diamond_chains.rend(); ++diamond_chain) {
     TF_RET_CHECK(FuseDiamondChain(*diamond_chain).ok());
   }
+
+  VLOG(1) << "Finish SoftmaxRewriterTriton pass.";
   return true;
 }
 }  // namespace xla::gpu

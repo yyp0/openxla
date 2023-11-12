@@ -1672,6 +1672,8 @@ StatusOr<bool> GemmRewriterTriton::Run(
                         RunOnComputation(computation, gpu_version_));
     changed |= result;
   }
+
+  VLOG(1) << "Finish GemmRewriterTriton pass.";
   return changed;
 }
 

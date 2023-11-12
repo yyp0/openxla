@@ -304,6 +304,8 @@ StatusOr<bool> HloCSE::Run(
       }
     }
   }
+
+  VLOG(1) << "Finish HloCSE pass.";
   return changed;
 }
 

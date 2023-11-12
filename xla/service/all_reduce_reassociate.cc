@@ -319,6 +319,8 @@ StatusOr<bool> AllReduceReassociate::Run(
       changed = true;
     }
   }
+
+  VLOG(1) << "Finish AllReduceReassociate pass."; 
   return changed;
 }
 

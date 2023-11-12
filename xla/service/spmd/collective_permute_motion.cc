@@ -309,6 +309,8 @@ StatusOr<bool> CollectivePermuteMotion::Run(
       }
     }
   }
+
+  VLOG(1) << "Finish CollectivePermuteMotion pass.";
   return changed;
 }
 

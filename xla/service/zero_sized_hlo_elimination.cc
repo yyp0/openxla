@@ -54,6 +54,8 @@ StatusOr<bool> ZeroSizedHloElimination::Run(
       }
     }
   }
+
+  VLOG(1) << "Finish ZeroSizedHloElimination pass.";
   return changed;
 }
 

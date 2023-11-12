@@ -197,6 +197,7 @@ StatusOr<bool> HloDCE::Run(
   VLOG(2) << "After dce:";
   XLA_VLOG_LINES(2, module->ToString());
 
+  VLOG(1) << "Finish HloDCE pass.";
   return changed;
 }
 

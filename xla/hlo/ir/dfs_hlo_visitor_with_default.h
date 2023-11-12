@@ -322,6 +322,11 @@ class DfsHloRewriteVisitor : public DfsHloVisitorWithDefault {
   Status ReplaceWithNewInstruction(
       HloInstruction* old_instruction,
       std::unique_ptr<HloInstruction> new_instruction) {
+    if (old_instruction->name() == "transpose.49") {
+      std::cout << "Old instruction: " << old_instruction->ToShortString();
+      std::cout << "New instruction: " << new_instruction->ToShortString();
+    }
+    
     VLOG(3) << "Replacing instruction:"
             << "\n  old: " << old_instruction->ToString()
             << "\n  new: " << new_instruction->ToString();

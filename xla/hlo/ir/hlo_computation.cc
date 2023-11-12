@@ -273,6 +273,11 @@ Status HloComputation::RemoveUnusedParametersImpl(bool allow_non_fusion) {
 
 bool HloComputation::IsSafelyRemovable(const HloInstruction* instruction,
                                        bool ignore_control_dependency) {
+  // Temporarily hardcode for transpose.49 in toy model.
+  // if (instruction->name() == "transpose.49") {
+  //   return true;
+  // }
+  
   // If the instruction has control predecessors or successors then we cannot
   // remove the instruction without violating ordering constraints (added, for
   // example, to avert interference due to buffer aliasing).

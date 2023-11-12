@@ -169,6 +169,8 @@ StatusOr<bool> CollectivePermuteDecomposer::Run(
       }
     }
   }
+
+  VLOG(1) << "Finish CollectivePermuteDecomposer pass.";
   return changed;
 }
 

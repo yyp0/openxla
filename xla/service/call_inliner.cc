@@ -186,6 +186,8 @@ StatusOr<bool> CallInliner::Run(
     // instructions.
     TF_RETURN_IF_ERROR(HloDCE().Run(module, execution_threads).status());
   }
+
+  VLOG(1) << "Finish CallInliner pass.";
   return did_mutate;
 }
 

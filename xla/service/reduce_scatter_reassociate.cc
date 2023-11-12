@@ -112,6 +112,7 @@ StatusOr<bool> ReduceScatterReassociate::Run(
     }
   }
 
+  VLOG(1) << "Finish ReduceScatterReassociate pass.";
   return changed;
 }
 

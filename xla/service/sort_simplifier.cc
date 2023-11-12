@@ -160,6 +160,7 @@ StatusOr<bool> SortSimplifier::Run(
     VLOG(2) << "HLO module unchanged after SortSimplifier";
   }
 
+  VLOG(1) << "Finish SortSimplifier pass.";
   return changed;
 }
 }  // namespace xla

@@ -306,6 +306,56 @@ Status GpuCompiler::OptimizeHloModule(HloModule* hlo_module,
                                       const CompileOptions& options,
                                       const GpuTargetConfig& gpu_target_config,
                                       const AutotuneResults* autotune_results) {
+  // Add weight update reschedule logic.
+  // Temporarily hardcode for toy model adam.
+  // VLOG(1) << "Start hardcode for apply branch in toy model.";
+  // HloComputation* entry = hlo_module->entry_computation();
+  // HloInstruction* to_delay;
+  // for (HloInstruction* instr : entry->instructions()) {
+  //   // if (instr->name() == "transpose.49") {
+  //   if (instr->name() == "add.47") {
+  //     to_delay = instr;
+  //     // VLOG(1) << "Get the instruction transpose.49 to be delayed.";
+  //     VLOG(1) << "Get the instruction add.47 to be delayed.";
+  //   }
+  // }
+
+  // for (HloInstruction* instr : entry->instructions()) {
+  //   if (instr->name() == "add.105") {
+  //     // instr->AddUser(to_delay);
+  //     TF_CHECK_OK(instr->AddControlDependencyTo(to_delay));
+  //     // VLOG(1) << "Add control dependency from add.105 to transpose.49";
+  //     VLOG(1) << "Add control dependency from add.105 to add.47";
+  //   }
+  // }  
+
+  // // Do some check.
+  // for (HloInstruction* instr : entry->instructions()) {
+  //   if (instr->name() == "add.105") {
+  //     auto users = instr->control_successors_();
+  //     for (HloInstruction* user : users) {
+  //       if (user->name() == "transpose.49") {
+  //         VLOG(1) << "OK. The apply branch add.105 is pre-scheduled.";
+  //         break;
+  //       }
+  //     }
+  //   }
+
+  //   if (instr->name() == "transpose.49") {
+  //     auto operands = instr->control_predecessors_();
+  //     for (HloInstruction* operand : operands) {
+  //       if (operand->name() == "add.105") {
+  //         VLOG(1) << "OK. The target apply branch transpose.49 is delayed.";
+  //         break;
+  //       }
+  //     }
+  //   }
+  // }
+
+  // if (true) {
+  //   return OkStatus();
+  // }
+
   const DebugOptions& debug_options = hlo_module->config().debug_options();
 
   // By default use an externally provided thread pool.
