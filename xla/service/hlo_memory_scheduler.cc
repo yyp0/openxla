@@ -15,6 +15,8 @@ limitations under the License.
 
 #include "xla/service/hlo_memory_scheduler.h"
 
+// #include <pybind11/stl.h>
+
 #include <algorithm>
 #include <limits>
 #include <map>
@@ -58,9 +60,15 @@ class RoamScheduler {
       // return scheduler.CreateSchedule();
       // TF_CHECK_OK(scheduler.SearchMemoryInsensitivePoints());
       TF_CHECK_OK(scheduler.ExtractGraphInformation());
-      int64_t meta_size = points_to_analysis.num_logical_buffers();
-
-      VLOG(1) << "Num logical buffers: " << meta_size;
+      // int64_t meta_size = points_to_analysis.num_logical_buffers();
+      int64_t num_logical_buffers = 0;
+      for (HloInstruction* curr_instr : computation->instructions()) {
+        auto fanouts = points_to_analysis.GetBuffersDefinedByInstruction(curr_instr);
+        for (auto buffer : fanouts) {
+          num_logical_buffers++;
+        }
+      }
+      VLOG(1) << "Num logical buffers: " << num_logical_buffers;
 
       // Print unique_id of logical buffers.
       VLOG(1) << "Check unique id of logical buffers";
@@ -71,23 +79,42 @@ class RoamScheduler {
 
       // Print MUL information.
       VLOG(1) << "Check max useful liverange information";
-      for (int i = 0; i < meta_size; ++i) {
-        VLOG(1) << "Buffer id: " << i 
-                << " mul: " 
-                << scheduler.max_useful_liverange_[i][0] << " "
-                << scheduler.max_useful_liverange_[i][1] << " "
-                << scheduler.max_useful_liverange_[i][2] << " "
-                << scheduler.max_useful_liverange_[i][3];
+      for (int i = 0; i < num_logical_buffers; ++i) {
+        std::cout << "Buffer id: " << i << " ";
+        for (int j = 0; j < scheduler.max_useful_liverange_[i].size(); ++j) {
+          std::cout << "(";
+          for (int k = 0; k < scheduler.max_useful_liverange_[i][j].size(); ++k) {
+            std::cout << scheduler.max_useful_liverange_[i][j][k] << ",";
+          }
+          std::cout << ") ";
+        }
+        std::cout << std::endl;
       }
 
       // Print data information of the graph.
       VLOG(1) << "Check dependencies information: ";
-      for (int i = 0; i < meta_size; ++i) {
-        for (int j = 0; j < meta_size; ++j) {
-          std::cout << "\t" << scheduler.dependencies_[i][j] << " ";
+      for (int i = 0; i < num_logical_buffers; ++i) {
+        for (int j = 0; j < scheduler.dependencies_[i].size(); ++j) {
+          std::string relation = "default: ";
+          if (j == 0) {
+            relation = "predecencies: ";
+          } else if (j == 1) {
+            relation = "successors: ";
+          } else if (j == 2) {
+            relation = "siblings: ";
+          }
+
+          VLOG(1) << relation;
+          for (int k = 0; k < scheduler.dependencies_[i][j].size(); ++k) {
+            std::cout << scheduler.dependencies_[i][j][k] << " ";
+          }
+          std::cout << std::endl;
         }
-        std::cout << std::endl;
       }
+
+      // Check min_peak_memory and max_memory_usage.
+      VLOG(1) << "min_peak_memory=" << scheduler.min_peak_memory << \
+                 "max_memory_usage=" << scheduler.max_memory_usage;
 
       return OkStatus();
     }
@@ -114,8 +141,14 @@ class RoamScheduler {
     std::vector<std::tuple<int64_t, HloInstruction*>> memory_insensitive_points_; 
 
     absl::flat_hash_map<const LogicalBuffer*, int64_t> logical_buffer_unique_id_;
-    std::vector<std::vector<int64_t>> max_useful_liverange_;
-    std::vector<std::vector<int>> dependencies_;
+    std::vector<std::vector<std::vector<int64_t>>> max_useful_liverange_;
+    std::vector<std::vector<std::vector<int64_t>>> dependencies_;
+    std::vector<int64_t> logical_buffer_size_;
+    std::vector<int64_t> persistent_buffer_;
+    std::vector<int64_t> buffer_alias_;
+    int64_t min_peak_memory;
+    int64_t max_memory_usage;
+
 
     // Compute ASAP time of nodes.
     int64_t ComputeASAPTime(HloInstruction*);
@@ -128,6 +161,10 @@ class RoamScheduler {
 
     Status ExtractGraphInformation();
     
+    // TODO(HuiyaoShu.HYS): feat call python solver.
+    // std::tuple<...> CallSolver();
+
+    HloInstructionSequence CreateSchedule();
 };
 
 Status RoamScheduler::ExtractGraphInformation() {
@@ -147,30 +184,36 @@ Status RoamScheduler::ExtractGraphInformation() {
             <<  " alap=" << alap_[instruction];
   }
 
-  // Init max_useful_liverange_ and dependencies_.
-  int64_t meta_size = points_to_analysis_.num_logical_buffers();
-  max_useful_liverange_.resize(meta_size, std::vector<int64_t>(4, -1));
-  dependencies_.resize(meta_size, std::vector<int>(meta_size, 0));
-
-
-  int64_t buffer_id = 0;
+  // Get the number of logical buffers in the current computation.
+  int64_t num_logical_buffers = 0;
   for (HloInstruction* curr_instr : computation_->instructions()) {
+    auto fanouts = points_to_analysis_.GetBuffersDefinedByInstruction(curr_instr);
+    for (auto buffer : fanouts) {
+      VLOG(1) << "Init buffer: " << buffer->ToString() << " with id=" << num_logical_buffers;
+      logical_buffer_unique_id_[buffer] = num_logical_buffers++;
+    }
+  }
+
+  // Init max_useful_liverange_ and dependencies_.
+  max_useful_liverange_.resize(num_logical_buffers, 
+                               std::vector<std::vector<int64_t>>(/*dynamic length*/));
+  dependencies_.resize(num_logical_buffers, 
+                       std::vector<std::vector<int64_t>>(3, 
+                      std::vector<int64_t>(/*dynamic length*/)));
+  logical_buffer_size_.resize(num_logical_buffers, -1);
+  min_peak_memory = 0;
+  max_memory_usage = 0;
+  VLOG(1) << "The total number of logical buffers in the current computation: " << num_logical_buffers;
+
+
+  absl::flat_hash_set<int64_t> traversed_buffer;
+  for (HloInstruction* curr_instr : computation_->instructions()) {
+    int64_t required_memory = 0;
     absl::flat_hash_set<const LogicalBuffer*> used_buffers;
     for (auto operand : curr_instr->operands()) {
       points_to_analysis_.GetPointsToSet(operand).ForEachElement(
         [&] (const ShapeIndex&,
             const PointsToSet::BufferList& buffers) {
-              // used_buffers.insert(buffers.begin(), buffers.end());
-              for (auto tmp : buffers) {
-                // used_buffers.push_back(tmp);
-                // VLOG(1) << "Logical buffer: " << tmp->ToString();
-                if (logical_buffer_unique_id_.find(tmp) == 
-                    logical_buffer_unique_id_.end()) {
-                  // logical_buffer_unique_id_[tmp] = buffer_id++;
-                  VLOG(1) << "Assign buffer: " << tmp->ToString() << " with id=" << buffer_id;
-                  logical_buffer_unique_id_[tmp] = buffer_id++;
-                }
-              }
               used_buffers.insert(buffers.begin(), buffers.end());
         }
       );
@@ -181,82 +224,80 @@ Status RoamScheduler::ExtractGraphInformation() {
     alap_r = alap_[curr_instr];
     for (auto buffer : used_buffers) {
       int64_t curr_buffer_id = logical_buffer_unique_id_[buffer];
+      int64_t buffer_size = size_function_(*buffer);
+      logical_buffer_size_[curr_buffer_id] = buffer_size;
+      required_memory += buffer_size;
       
+      // TODO(HuiyaoSHU.HYS): feat the alias information.
+
+      // Get buffer alias information.
+      // auto alias = points_to_analysis_.GetBufferAliases(*buffer);
+      // for (auto alias_buffer : alias) {
+      //   if (traversed_buffer.find(alias_buffer) != 
+      //       traversed_buffer.end()) {
+      //     buffer_alias_[curr_buffer_id].push_back(
+      //                    logical_buffer_unique_id_[alias_buffer]);
+      //   }
+      // }
+
       // Get source of the logical buffer.
       HloInstruction* source = buffer->instruction();
+      if (source->opcode() == HloOpcode::kParameter) {
+        persistent_buffer_.push_back(logical_buffer_unique_id_[buffer]);
+      }
+
       int64_t asap_l, alap_l;
       asap_l = asap_[source];
       alap_l = alap_[source];
 
       // Update max useful liverange for each buffer.
-      max_useful_liverange_[curr_buffer_id][0] = asap_l;
-      max_useful_liverange_[curr_buffer_id][1] = alap_l;
-      max_useful_liverange_[curr_buffer_id][2] = asap_r;
-      max_useful_liverange_[curr_buffer_id][3] = alap_r; 
-
-      // // Get the predecenies logical buffers.
-      // points_to_analysis_.GetPointsToSet(source).ForEachElement(
-      //   [&] (const ShapeIndex&,
-      //        const PointsToSet::BufferList& pre_buffers) {
-      //         for (const LogicalBuffer* pre_buffer : pre_buffers) {
-      //           if (logical_buffer_unique_id_.find(pre_buffer) == 
-      //               logical_buffer_unique_id_.end()) {
-      //             logical_buffer_unique_id_[pre_buffer] = ++buffer_id;      
-      //           }
-
-      //           int64_t pre_id = logical_buffer_unique_id_[pre_buffer];
-
-      //           if (dependencies_[pre_id][curr_buffer_id] > 0) {
-      //             continue;  
-      //           }
-
-      //           // Is here enough?
-      //           dependencies_[pre_id][curr_buffer_id] = 1;
-      //           dependencies_[curr_buffer_id][pre_id] = 2;
-      //         }
-      //        }
-      // );
+      if (max_useful_liverange_[curr_buffer_id].size() == 0) {
+        max_useful_liverange_[curr_buffer_id].emplace_back(asap_l, alap_l);
+      }
+      max_useful_liverange_[curr_buffer_id].emplace_back(asap_r, alap_r);
 
       // Get the siblings logical buffers.
       auto siblings = points_to_analysis_.GetBuffersDefinedByInstruction(source);
       for (auto sib : siblings) {
-        if (logical_buffer_unique_id_.find(sib) == 
-            logical_buffer_unique_id_.end()) {
-          VLOG(1) << "Assign buffer: " << sib->ToString() << " with id=" << buffer_id;
-          logical_buffer_unique_id_[sib] = buffer_id++;
-        }
+        if (traversed_buffer.find(curr_buffer_id) != 
+            traversed_buffer.end()) {
+          break;
+        } 
 
         int64_t sib_id = logical_buffer_unique_id_[sib];
-        dependencies_[sib_id][curr_buffer_id] = 3;
-        dependencies_[curr_buffer_id][sib_id] = 3;
+        dependencies_[curr_buffer_id][2].push_back(sib_id);
       }
+      traversed_buffer.insert(curr_buffer_id);
 
       // Get the succesors logical buffers.
       auto succesors = points_to_analysis_.GetBuffersDefinedByInstruction(curr_instr);
       for (auto succ : succesors) {
-        if (logical_buffer_unique_id_.find(succ) == 
-            logical_buffer_unique_id_.end()) {
-          VLOG(1) << "Assign buffer: " << succ->ToString() << " with id=" << buffer_id;
-          logical_buffer_unique_id_[succ] = buffer_id++;
-        }
+        int64_t succ_size = size_function_(*succ);
+        required_memory += succ_size;
+        max_memory_usage += succ_size;
 
         int64_t succ_id = logical_buffer_unique_id_[succ];
-        if (succ.instruction() == computation_->root_instruction()) {
-          max_useful_liverange_[succ][0] = asap_[succ.instruction()];
-          max_useful_liverange_[succ][1] = max_useful_liverange_[succ][2]
-                                         = max_useful_liverange_[succ][3]
-                                         = alap_[succ.instruction()];
+        if (succ->instruction() == computation_->root_instruction()) {
+          HloInstruction* root = computation_->root_instruction();
+          if (max_useful_liverange_[succ_id].size() == 0) {
+            max_useful_liverange_[succ_id].emplace_back(asap_[root], alap_[root]);
+            max_useful_liverange_[succ_id].emplace_back(alap_[root], alap_[root]);
+          }
         }
-        dependencies_[succ_id][curr_buffer_id] = 2;
-        dependencies_[curr_buffer_id][succ_id] = 1;
+        dependencies_[curr_buffer_id][1].push_back(succ_id);
+        dependencies_[succ_id][0].push_back(curr_buffer_id);
       }
-
-      // ++buffer_id;
+    }
+    
+    
+    if (required_memory > min_peak_memory) {
+      min_peak_memory = required_memory;
     }
   }
 
   return OkStatus();
 }
+
 
 // Need to be optimized.
 int64_t RoamScheduler::ComputeASAPTime(HloInstruction* instruction) {
@@ -314,6 +355,29 @@ int64_t RoamScheduler::ComputeALAPTime(HloInstruction* instruction) {
 
   return traversed.size() - traversed_param;
 }
+
+// std::tuple<...> RoamScheduler::CallSolver() {
+//   PyGILState_STATE gstate = PyGILState_Ensure();
+//   {
+//     // Import OLLA.
+//     py::object submodule = py::module_::import("roam.opti_graph");
+//     py::object call_solver_serialized_args = submodule.attr("call_solver_serialized_args");
+    
+//     py::object ret = call_solver_serialized_args(max_useful_liverange_, dependencies_, max_useful_liverange_.size());
+//     if (ret.is_none()) {
+//       PyGILState_Release(gstate);
+//       VLOG(1) << "No valid result generated by RoamScheduler.";
+//       exit(-1);
+//     }
+
+//     // Deal with output.
+
+//   }
+//   PyGILState_Release(gstate);
+
+//   // Return solver results.
+
+// }
 
 Status RoamScheduler::SearchMemoryInsensitivePoints() {
   int64_t num_instr = computation_->instruction_count();
