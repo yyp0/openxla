@@ -1,16 +1,13 @@
-import itertools
 import logging
 import math
 import time
 import sys
 from collections import defaultdict, OrderedDict
 
+import multiprocessing
 import intervaltree
 import pulp
 from pulp import LpVariable, LpProblem, LpMinimize, lpSum, lpDot, LpStatus
-
-import multiprocessing
-from model_opt import dataflow_graph, util
 
 
 class TimeStepsForEdges:
@@ -62,14 +59,24 @@ class DensePreserveVarsMap:
 
 def call_solver_serialized(max_useful_liverange,
                            dependencies,
-                           persistent_buffer,
-                           buffer_size, 
+                           logical_buffer_size,  
                            no_succ_buffer,
-                           logical_buffer_size,     
-                           min_peak_mem,    
-                           max_usage):     
+                           min_peak_memory,    
+                           max_memory_usage,
+                           persistent_buffer,
+                           buffer_alias,):
+    print("Start to launch solver.")
+
+    print(f"max_useful_liverange: {max_useful_liverange} \n \
+                 dependencies: {dependencies} \n \
+                 logical_buffer_size: {logical_buffer_size} \n \
+                 no_succ_buffer: {no_succ_buffer} \n \
+                 min_peak_memory: {min_peak_memory} \n \
+                 max_memory_usage: {max_memory_usage}.")     
     scheduler_opti = LpProblem("scheduler optimization", LpMinimize)
     
+    
+
     # Create Varaibles.
     num_logical_buffer = len(max_useful_liverange)   
     generate_vars = defaultdict(lambda: {})
@@ -111,7 +118,7 @@ def call_solver_serialized(max_useful_liverange,
                 scheduler_opti += generate_vars[id][t] == 0, \
                                   "generate_var_less_alap_src_buffer_" + str(id)
         
-        if buffer_size[id] == 0:
+        if logical_buffer_size[id] == 0:
             prev = TimeStepsForEdges(live_range)
             for t in TimeStepsForEdges(live_range, start_offset=1):
                 if t <= alap_src:
@@ -145,16 +152,22 @@ def call_solver_serialized(max_useful_liverange,
         scheduler_opti += s == 1, f"force_{id}_generated_once"
 
     for buffer_set in no_succ_buffer:   # Get no_succ_buffer from hlo graph.
-        if len(buffer_set) <= 1:
+        if len(buffer_set) <= 2:
             continue
         
+        alap_instr = buffer_set[-1]
         timesteps = set(TimeStepsForEdges(max_useful_liverange[buffer_set[0]]))
-        for buffer in buffer_set:
+        for i in range(len(buffer_set)):
+            if i == len(buffer_set) - 1:
+                break   
             timesteps &= set(TimeStepsForEdges(max_useful_liverange[buffer]))
         timesteps = sorted(timesteps)
 
         sum_of_all_live = 0
         for t in timesteps:
+            if t > alap_instr:
+                break
+
             all_live = LpVariable(f'fanin_buffers_alive_at_ts_{t}')
             for buffer in buffer_set:
                 scheduler_opti += all_live <= preserve_vars[buffer][t], \
@@ -180,8 +193,8 @@ def call_solver_serialized(max_useful_liverange,
     # Add objective.
     v = LpVariable(
         "peak_memory_usage", 
-        lowBound=min_peak_mem // gcd,
-        upper_bound=max_usage,
+        lowBound=min_peak_memory // gcd,
+        upper_bound=max_memory_usage,
     )
     
     for ts, mem in mem_at_timestep.items():
@@ -195,5 +208,16 @@ def call_solver_serialized(max_useful_liverange,
                                threads=multiprocessing.cpu_count())
     
     scheduler_opti.solve(solver)
+    
+    created_time = {}
+    status = LpStatus[scheduler_opti.status]
+    if status == "Optimal":
+        # TODO(HuiyaoShu): validate the results. 
+        for id, ts in generate_vars.items():
+            for t in ts:
+                if generate_vars[id][t].varValue >= 0.99:
+                    created_time[id] = t
+    else: 
+        logging.error(f"Finish the solver, final status is {status}")
 
-    # TODO(HuiyaoShu.HYS): Check and process the results.
+    return created_time

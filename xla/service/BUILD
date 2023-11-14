@@ -1892,6 +1892,7 @@ cc_library(
         "@tsl//tsl/lib/gtl:map_util",
         "@tsl//tsl/platform:errors",
         "@tsl//tsl/platform:logging",
+        "@pybind11",
     ],
 )
 

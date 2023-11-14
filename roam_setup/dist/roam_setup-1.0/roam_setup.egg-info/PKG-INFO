@@ -1,0 +1,6 @@
+Metadata-Version: 2.1
+Name: roam-setup
+Version: 1.0
+Summary: Optimize xla hlo operator execution order through ILP method
+Home-page: 
+Author: HuiyaoShu
