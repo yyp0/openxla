@@ -32,6 +32,24 @@ class TimeStepsForEdges:
     def __next__(self):
         return self.iter.__next__()
 
+class TimeStepsForMultiBuffers:
+    def __init__(self, live_ranges):
+        max_lb, min_ub = 0, sys.maxsize
+        for live_range in live_ranges:
+            lb, ub = ComputeSpan(live_range)
+            max_lb = max(max_lb, lb)
+            min_ub = min(min_ub, ub)
+        
+        ts = list(range(max_lb, min_ub))
+        ts = sorted(ts)
+        self.iter = iter(ts)
+    
+    def __iter__(self):
+        return self
+    
+    def __next__(self):
+        return self.iter.__next__()
+
 
 class DensePreserveVarsMap:
     def __init__(self, sparse_map):
@@ -59,6 +77,15 @@ class DensePreserveVarsMap:
         return self.local_map.items()
 
 
+def ComputeSpan(liverange):
+    lb = liverange[0][0]
+    ub = 0
+    for span in liverange[1:]:
+        ub = max(ub, span[1])
+
+    return (lb, ub)
+
+
 def call_solver_serialized(max_useful_liverange,
                            dependencies,
                            logical_buffer_size,  
@@ -77,7 +104,7 @@ def call_solver_serialized(max_useful_liverange,
                  max_memory_usage: {max_memory_usage}.")     
     scheduler_opti = LpProblem("scheduler optimization", LpMinimize)
     
-    
+    # import pdb;pdb.set_trace()
 
     # Create Varaibles.
     num_logical_buffer = len(max_useful_liverange)   
@@ -131,24 +158,29 @@ def call_solver_serialized(max_useful_liverange,
                     scheduler_opti += preserve_vars[id][t] == 1, \
                                       "ctrl_edge_all_ready_buffer_" + str(id)
 
-        for t in range(asap_src, alap_src + 1):
-            # Add siblings generated at the same time constraints.
-            siblings = dependencies[id][2]
-            # TODO(HuiyaoShu): merge the timesteps with siblings'.
-            for sib in siblings:
+        # Add siblings generated at the same time constraints.
+        siblings = dependencies[id][2]
+        live_ranges = []
+        for sib in siblings:
+            live_ranges.append(max_useful_liverange[sib])
+        
+        # import pdb;pdb.set_trace()
+        for sib in siblings:
+            for t in range(asap_src, alap_src + 1):
                 scheduler_opti += generate_vars[id][t] == \
-                                  generate_vars[sib][t], \
-                                  f"generate_var_buffer_{id}_sib_{sib}"
+                                generate_vars[sib][t], \
+                                f"generate_var_buffer_{id}_sib_{sib}_at_{t}"
 
-            # Add precedencies generated later than successors constraints.
-            precedencies = dependencies[id][0]
-            # TODO(HuiyaoShu): merge the timesteps with precedencies'.
-            for pre in precedencies:
+        # Add precedencies generated before successors constraints.
+        precedencies = dependencies[id][0]
+        for pre in precedencies:
+            live_ranges = [max_useful_liverange[id], max_useful_liverange[pre]]
+            for t in TimeStepsForMultiBuffers(live_ranges):
                 scheduler_opti += generate_vars[id][t] <= preserve_vars[pre][t], \
-                                  f"generate_var_{id}_later_preserve_var_{pre}_{t}"
+                                f"generate_var_{id}_later_precedencies_{pre}_at_{t}"
                 
     # Force the generation of each buffer exactly once.
-    for id, ts in generate_vars:
+    for id, ts in generate_vars.items():
         s = 0
         for v in ts.values():
             s += v
@@ -180,6 +212,31 @@ def call_solver_serialized(max_useful_liverange,
         scheduler_opti += sum_of_all_live >= 1, \
                           "force_fanin_buffers_live_at_same_time_one"
 
+    # Constraints for persistent buffer and activations.
+    for id in range(num_logical_buffer):
+        if id in persistent_buffer:
+            is_first = True
+            for t in TimeStepsForEdges(max_useful_liverange[id]):
+                if is_first:
+                    scheduler_opti += generate_vars[id][t] == 1, \
+                                      f"weight_{id}_generat_var_at_first_time_{t}"
+                    scheduler_opti += preserve_vars[id][t] == 0, \
+                                      f"weight_{id}_preserve_var_at_first_time_{t}"
+                    is_first = False
+                else:
+                    scheduler_opti += preserve_vars[id][t] == 1, \
+                                      f"weight_{id}_preserve_var_at_{t}"
+            continue
+
+        first = max_useful_liverange[id][0][1] + 1  # alap_src + 1
+        last = 0
+        for live in max_useful_liverange[id][1:]:
+            last = max(last, live[0])   # max(asap[snk])
+        for ts in TimeStepsForEdges(max_useful_liverange[id]):
+            if ts < first or ts > last:
+                continue
+            scheduler_opti += preserve_vars[id][ts] == 1, \
+                              f"buffer_{id}_must_be_preserved_util_last_used"
 
     # Memory usage at each timestep
     gcd = 4
@@ -198,7 +255,7 @@ def call_solver_serialized(max_useful_liverange,
     v = LpVariable(
         "peak_memory_usage", 
         lowBound=min_peak_memory // gcd,
-        upper_bound=max_memory_usage,
+        upBound=max_memory_usage,
     )
     
     for ts, mem in mem_at_timestep.items():
@@ -206,7 +263,8 @@ def call_solver_serialized(max_useful_liverange,
 
     msg = False
     time_limit = 600
-    solver = pulp.PILP_CBC_CMD(mip=True,
+    # pulp.listSolvers(onlyAvailable=True)
+    solver = pulp.PULP_CBC_CMD(mip=True,
                                msg=msg,
                                timeLimit=time_limit,
                                threads=multiprocessing.cpu_count())
@@ -223,6 +281,9 @@ def call_solver_serialized(max_useful_liverange,
                     created_time[id] = t
     else: 
         logging.error(f"Finish the solver, final status is {status}")
+
+    for id, t in created_time.items():
+        print(f"Created time for buffer {id}: {t}")
 
     return created_time
 

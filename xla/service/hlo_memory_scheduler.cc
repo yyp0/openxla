@@ -304,11 +304,9 @@ Status RoamScheduler::ExtractGraphInformation() {
       int64_t curr_buffer_id = logical_buffer_unique_id_[buffer];
       used_buffers_id.emplace_back(curr_buffer_id);
       int64_t buffer_size = size_function_(*buffer);
-      // logical_buffer_size_[curr_buffer_id] = buffer_size;
       required_memory += buffer_size;
       
       // TODO(HuiyaoSHU.HYS): feat the alias information.
-
       // Get buffer alias information.
       // auto alias = points_to_analysis_.GetBufferAliases(*buffer);
       // for (auto alias_buffer : alias) {
