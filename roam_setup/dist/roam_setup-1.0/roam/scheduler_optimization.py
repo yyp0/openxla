@@ -14,9 +14,9 @@ class TimeStepsForEdges:
     def __init__(self, live_range, start_offset=0): 
         intervals = intervaltree.IntervalTree()
         for (lb, ub) in live_range:
-            if lb == ub:
-                ub += 1
-            intervals.add(intervaltree.Interval(lb, ub))
+            # if lb == ub:
+            #     ub += 1
+            intervals.add(intervaltree.Interval(lb, ub + 1))
         intervals.merge_overlaps()
         
         ts = []
@@ -84,6 +84,70 @@ def ComputeSpan(liverange):
         ub = max(ub, span[1])
 
     return (lb, ub)
+
+
+def validate_timeline(generate_vars, 
+             preseve_vars, 
+             max_useful_liverange, 
+             dependencies):
+    num_logical_buffer = len(dependencies)
+    for id in range(num_logical_buffer):
+        lb, ub = ComputeSpan(max_useful_liverange[id])
+
+        # Validate generate time.
+        sum = 0
+        created_time = -1
+        for t, v in generate_vars[id].items():
+            value = v.varValue
+            if value >= 0.99:
+                if t >= lb and t <= ub:
+                    sum += value
+                    created_time = t
+                    continue
+                else:
+                    logging.error(f"Invalid created time for buffer \
+                                    {id} at {t} ({lb}-{ub})")
+                    return False
+
+        if sum > 1 or sum == 0: 
+            logging.error(f"Buffer {id} is created more than one time {sum}.")
+            return False
+
+        # Validate preserve time.
+        for t, v in preseve_vars[id].items():
+            value = v.varValue
+            if value >= 0.99 and t <= created_time:
+                logging.error(f"Buffer {id} is preserved before created \
+                                at {t}/{created_time}.")
+                return False
+
+        # Validate the dependencies with siblings.
+        sibs = dependencies[id][2]
+        for sib in sibs:
+            for t, v in generate_vars[sib].items():
+                value = v.varValue
+                if value >= 0.99: 
+                    if t != created_time:
+                        logging.error(f"Buffer {id} is not created at the \
+                                        same time with its sib {sib}")
+                        return False
+                    break
+
+        # Validate the dependencies with precedencies.
+        pres = dependencies[id][0]
+        for pre in pres:
+            if created_time not in preseve_vars[pre]:
+                logging.error(f"The created time of buffer {id} exceeds the \
+                                lifetime of its precedence {pre} at time {created_time}.")
+                return False
+
+            value = preseve_vars[pre][created_time].varValue
+            if value < 0.98:
+                logging.error(f"Buffer {id} is not created with the precedence \
+                                {pre} alive in memory at {created_time}.")   
+                return False
+
+    return True  
 
 
 def call_solver_serialized(max_useful_liverange,
@@ -292,6 +356,15 @@ def call_solver_serialized(max_useful_liverange,
             for t in ts:
                 if generate_vars[id][t].varValue >= 0.99:
                     created_time[id] = t
+        
+        ret = validate_timeline(generate_vars, 
+                                preserve_vars, 
+                                max_useful_liverange,
+                                dependencies)
+        if not ret:
+            logging.error(f"There is some error in the optimized timeline.")
+        else:
+            logging.info(f"The optimized results pass the correctness validation.")
     else: 
         logging.error(f"Finish the solver, final status is {status}")
 
