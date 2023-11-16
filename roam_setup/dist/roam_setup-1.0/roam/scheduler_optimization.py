@@ -10,7 +10,7 @@ import pulp
 from pulp import LpVariable, LpProblem, LpMinimize, lpSum, lpDot, LpStatus
 
 
-class TimeStepsForEdges:
+class TimeStepsForEdge:
     def __init__(self, live_range, start_offset=0): 
         intervals = intervaltree.IntervalTree()
         for (lb, ub) in live_range:
@@ -35,14 +35,18 @@ class TimeStepsForEdges:
 class TimeStepsForMultiBuffers:
     def __init__(self, live_ranges):
         max_lb, min_ub = 0, sys.maxsize
-        for live_range in live_ranges:
-            lb, ub = ComputeSpan(live_range)
-            max_lb = max(max_lb, lb)
-            min_ub = min(min_ub, ub)
+        timesteps = set(TimeStepsForEdge(live_ranges[0]))
+        for live_range in live_ranges[1:]:
+            timesteps &= set(TimeStepsForEdge(live_range))
+            # lb, ub = ComputeSpan(live_range)
+            # max_lb = max(max_lb, lb)
+            # min_ub = min(min_ub, ub)
         
-        ts = list(range(max_lb, min_ub))
-        ts = sorted(ts)
-        self.iter = iter(ts)
+        timesteps = sorted(timesteps)
+        self.iter = iter(timesteps)
+        # ts = list(range(max_lb, min_ub + 1))
+        # ts = sorted(ts)
+        # self.iter = iter(ts)
     
     def __iter__(self):
         return self
@@ -178,7 +182,7 @@ def call_solver_serialized(max_useful_liverange,
      
     for id in range(num_logical_buffer):
         live_range = max_useful_liverange[id]
-        for ts in TimeStepsForEdges(live_range):
+        for ts in TimeStepsForEdge(live_range):
             v = LpVariable('generate_variable_for_'+str(id)+"_at_"+str(ts), 
                            0, 1, pulp.LpBinary)
             generate_vars[id][ts] = v
@@ -187,7 +191,6 @@ def call_solver_serialized(max_useful_liverange,
             preserve_vars[id][ts] = v    
     
     # Memory usage at each timestep
-    print("Calculate memory usage at each timestep.")
     gcd = 4
     mem_at_timestep = defaultdict(lambda: 0)
     for id in range(num_logical_buffer):
@@ -217,10 +220,9 @@ def call_solver_serialized(max_useful_liverange,
     print(f"Start to build constraints.")
     for id in range(num_logical_buffer):
         live_range = max_useful_liverange[id]
-        prev = TimeStepsForEdges(live_range)
-        curr = TimeStepsForEdges(live_range, start_offset=1)
+        prev = TimeStepsForEdge(live_range)
+        curr = TimeStepsForEdge(live_range, start_offset=1)
         
-        print(f"Build constraints for correctness of C and P.")
         # Correctness constraints for created variables.
         for t in curr:
             p = prev.__next__()
@@ -233,19 +235,18 @@ def call_solver_serialized(max_useful_liverange,
                               # "at_most_one_at_" + str(t) + "_buffer_ " + str(id)
         
         # Simplify the problem.
-        print("Build constraints to simplify the problem.")
         asap_src, alap_src = max_useful_liverange[id][0][0], max_useful_liverange[id][0][1]
         scheduler_opti += preserve_vars[id][asap_src] == 0 # , \
                           # "preserve_var_0_at_" + str(t) + "_buffer_ " + str(id)
         
-        for t in TimeStepsForEdges(live_range):
+        for t in TimeStepsForEdge(live_range):
             if t > alap_src:
                 scheduler_opti += generate_vars[id][t] == 0 # , \
                                   # f"generate_var_less_alap_src_buffer_{id}_at_{t}"
         
         if logical_buffer_size[id] == 0:
-            prev = TimeStepsForEdges(live_range)
-            for t in TimeStepsForEdges(live_range, start_offset=1):
+            prev = TimeStepsForEdge(live_range)
+            for t in TimeStepsForEdge(live_range, start_offset=1):
                 if t <= alap_src:
                     scheduler_opti += preserve_vars[id][t] \
                                       >= preserve_vars[id][p] + generate_vars[id][p] # , \
@@ -255,13 +256,11 @@ def call_solver_serialized(max_useful_liverange,
                                       # "ctrl_edge_all_ready_buffer_" + str(id)
 
         # Add siblings generated at the same time constraints.
-        print("Build constraints to protect the correctness of siblings and precedencies.")
         siblings = dependencies[id][2]
-        live_ranges = []
-        for sib in siblings:
-            live_ranges.append(max_useful_liverange[sib])
+        # live_ranges = []
+        # for sib in siblings:
+        #     live_ranges.append(max_useful_liverange[sib])
         
-        # import pdb;pdb.set_trace()
         for sib in siblings:
             for t in range(asap_src, alap_src + 1):
                 scheduler_opti += generate_vars[id][t] == \
@@ -276,7 +275,6 @@ def call_solver_serialized(max_useful_liverange,
                 scheduler_opti += generate_vars[id][t] <= preserve_vars[pre][t] # , \
                                 # f"generate_var_{id}_later_precedencies_{pre}_at_{t}"
 
-    print("Force the generation of each buffer.")       
     # Force the generation of each buffer exactly once.
     for id, ts in generate_vars.items():
         s = 0
@@ -290,11 +288,11 @@ def call_solver_serialized(max_useful_liverange,
             continue
         
         alap_instr = buffer_set[-1]
-        timesteps = set(TimeStepsForEdges(max_useful_liverange[buffer_set[0]]))
+        timesteps = set(TimeStepsForEdge(max_useful_liverange[buffer_set[0]]))
         for i in range(len(buffer_set)):
             if i == len(buffer_set) - 1:
                 break   
-            timesteps &= set(TimeStepsForEdges(max_useful_liverange[buffer]))
+            timesteps &= set(TimeStepsForEdge(max_useful_liverange[buffer]))
         timesteps = sorted(timesteps)
 
         sum_of_all_live = 0
@@ -311,11 +309,10 @@ def call_solver_serialized(max_useful_liverange,
                           # "force_fanin_buffers_live_at_same_time_one"
 
     # Constraints for persistent buffer and activations.
-    print("Add constraints for persistent buffer and activations.")
     for id in range(num_logical_buffer):
         if id in persistent_buffer:
             is_first = True
-            for t in TimeStepsForEdges(max_useful_liverange[id]):
+            for t in TimeStepsForEdge(max_useful_liverange[id]):
                 if is_first:
                     scheduler_opti += generate_vars[id][t] == 1 # , \
                                       # f"weight_{id}_generat_var_at_first_time_{t}"
@@ -331,13 +328,16 @@ def call_solver_serialized(max_useful_liverange,
         last = 0
         for live in max_useful_liverange[id][1:]:
             last = max(last, live[0])   # max(asap[snk])
-        for ts in TimeStepsForEdges(max_useful_liverange[id]):
+        for ts in TimeStepsForEdge(max_useful_liverange[id]):
             if ts < first or ts > last:
                 continue
             scheduler_opti += preserve_vars[id][ts] == 1 # , \
                               # f"buffer_{id}_must_be_preserved_util_last_used_at_{ts}"
     
     # 4. Solve the problem.
+    print(f"Start to solve the problem. \n \
+    Variable number: {len(scheduler_opti.variables())} \n \
+    Contraints number: {len(scheduler_opti.constraints)}")
     msg = False
     time_limit = 600
     # pulp.listSolvers(onlyAvailable=True)
@@ -345,8 +345,12 @@ def call_solver_serialized(max_useful_liverange,
                                msg=msg,
                                timeLimit=time_limit,
                                threads=multiprocessing.cpu_count())
-    
+
+    start = time.time()
     scheduler_opti.solve(solver)
+    end = time.time()
+
+    print(f"Finish the solving process in {end - start}s.")
     
     created_time = {}
     status = LpStatus[scheduler_opti.status]
@@ -355,8 +359,8 @@ def call_solver_serialized(max_useful_liverange,
         for id, ts in generate_vars.items():
             for t in ts:
                 if generate_vars[id][t].varValue >= 0.99:
-                    created_time[id] = t
-        
+                    created_time[t] = id
+
         ret = validate_timeline(generate_vars, 
                                 preserve_vars, 
                                 max_useful_liverange,
@@ -377,12 +381,13 @@ def call_solver_serialized(max_useful_liverange,
 
 # Just for test
 def main():
-    max_useful_liverange = [[[0, 0], [1, 34], [1, 17]], [[0, 0], [2, 19], [13, 36]], [[0, 0], [1, 18]], [[0, 0], [1, 24]], [[0, 0], [5, 20], [11, 30]], [[0, 0], [5, 20], [11, 30]], [[0, 0], [5, 20], [11, 30]], [[0, 0], [9, 25], [11, 30]], [[0, 0], [9, 25], [11, 30]], [[0, 0], [9, 25], [11, 30]], [[2, 19], [5, 20]], [[11, 36], [27, 37]], [[11, 36], [27, 37]], [[13, 36], [27, 37]], [[5, 20], [6, 24], [6, 24], [6, 36], [6, 36]], [[5, 20], [9, 25], [6, 24], [6, 24], [6, 36], [6, 36], [27, 37]], [[5, 20], [9, 25], [6, 24], [6, 24], [6, 36], [6, 36], [27, 37]], [[5, 20], [6, 24], [6, 24], [6, 36], [6, 36], [27, 37]], [[5, 20], [6, 24], [6, 24], [6, 36], [6, 36], [27, 37]], [[9, 25], [10, 27], [10, 36]], [[9, 25], [11, 36], [11, 36], [11, 30], [10, 27], [10, 36]], [[9, 25], [10, 27], [10, 36], [27, 37]], [[2, 35], [3, 36], [27, 37]], [[1, 34], [2, 35]], [[2, 18], [3, 36], [5, 20], [9, 25], [27, 37]], [[1, 17], [2, 18]], [[11, 30], [12, 36], [12, 36], [12, 34], [12, 36]], [[11, 30], [12, 36], [12, 36], [12, 34], [12, 36], [27, 37]], [[11, 30], [12, 36], [12, 36], [12, 34], [12, 36], [27, 37]], [[11, 30], [13, 36], [13, 36], [12, 36], [12, 36], [12, 34], [12, 36], [27, 37]], [[11, 30], [12, 36], [12, 36], [12, 34], [12, 36], [27, 37]], [[27, 37], [37, 37]], [[1, 18], [2, 19], [11, 30]], [[1, 24], [9, 25]]] # [[[0, 0], [1, 3]], [[0, 0], [1, 3]], [[1, 3], [3, 3]]]
-    dependencies = [[[], [23, 25], [0]], [[], [10, 13], [1]], [[], [32], [2]], [[], [33], [3]], [[], [14, 15, 16, 17, 18, 26, 27, 28, 29, 30], [4]], [[], [14, 15, 16, 17, 18, 26, 27, 28, 29, 30], [5]], [[], [14, 15, 16, 17, 18, 26, 27, 28, 29, 30], [6]], [[], [19, 20, 21, 26, 27, 28, 29, 30], [7]], [[], [19, 20, 21, 26, 27, 28, 29, 30], [8]], [[], [19, 20, 21, 26, 27, 28, 29, 30], [9]], [[1, 32], [14, 15, 16, 17, 18], [10]], [[20], [31], [11]], [[20], [31], [12]], [[1, 29], [31], [13]], [[24, 6, 5, 4, 10], [], [14, 15, 16, 17, 18]], [[24, 6, 5, 4, 10], [19, 20, 21, 31], [14, 15, 16, 17, 18]], [[24, 6, 5, 4, 10], [19, 20, 21, 31], [14, 15, 16, 17, 18]], [[24, 6, 5, 4, 10], [31], [14, 15, 16, 17, 18]], [[24, 6, 5, 4, 10], [31], [14, 15, 16, 17, 18]], [[7, 33, 16, 9, 24, 8, 15], [], [19, 20, 21]], [[7, 33, 16, 9, 24, 8, 15], [11, 12, 26, 27, 28, 29, 30], [19, 20, 21]], [[7, 33, 16, 9, 24, 8, 15], [31], [19, 20, 21]], [[23], [31], [22]], [[0], [22], [23]], [[25], [14, 15, 16, 17, 18, 19, 20, 21, 31], [24]], [[0], [24], [25]], [[8, 5, 4, 6, 32, 9, 20, 7], [], [26, 27, 28, 29, 30]], [[8, 5, 4, 6, 32, 9, 20, 7], [31], [26, 27, 28, 29, 30]], [[8, 5, 4, 6, 32, 9, 20, 7], [31], [26, 27, 28, 29, 30]], [[8, 5, 4, 6, 32, 9, 20, 7], [13, 31], [26, 27, 28, 29, 30]], [[8, 5, 4, 6, 32, 9, 20, 7], [31], [26, 27, 28, 29, 30]], [[15, 30, 13, 29, 28, 21, 12, 24, 22, 11, 18, 17, 16, 27], [], []], [[2], [10, 26, 27, 28, 29, 30], [32]], [[3], [19, 20, 21], [33]]]  # [[[], [2], [0]], [[], [2], [1]], [[0, 1], [], []]]
-    logical_buffer_size = [8, 4, 524288, 2097152, 4, 8, 4, 8, 4, 4, 2048, 524288, 524288, 4, 32, 2097152, 2097152, 2097152, 2097152, 16, 2048, 2097152, 1024, 1024, 4096, 4096, 32, 524288, 524288, 1024, 524288, 112, 524288, 2097152]  # [4, 4, 4]
+    max_useful_liverange = [[[1, 1], [2, 8], [2, 2]], [[1, 2], [3, 3], [10, 10]], [[1, 1], [2, 2]], [[1, 4], [2, 5]], [[1, 3], [4, 4], [8, 8]], [[1, 3], [4, 4], [8, 8]], [[1, 3], [4, 4], [8, 8]], [[1, 5], [6, 6], [8, 8]], [[1, 5], [6, 6], [8, 8]], [[1, 5], [6, 6], [8, 8]], [[3, 3], [4, 4]], [[8, 10], [11, 11]], [[8, 10], [11, 11]], [[10, 10], [11, 11]], [[4, 4], [5, 5], [5, 5], [5, 10], [5, 10]], [[4, 4], [6, 6], [5, 5], [5, 5], [5, 10], [5, 10], [11, 11]], [[4, 4], [6, 6], [5, 5], [5, 5], [5, 10], [5, 10], [11, 11]], [[4, 4], [5, 5], [5, 5], [5, 10], [5, 10], [11, 11]], [[4, 4], [5, 5], [5, 5], [5, 10], [5, 10], [11, 11]], [[6, 6], [7, 7], [7, 10]], [[6, 6], [8, 10], [8, 10], [8, 8], [7, 7], [7, 10]], [[6, 6], [7, 7], [7, 10], [11, 11]], [[3, 9], [4, 10], [11, 11]], [[2, 8], [3, 9]], [[3, 3], [4, 10], [4, 4], [6, 6], [11, 11]], [[2, 2], [3, 3]], [[8, 8], [9, 10], [9, 10], [9, 9], [9, 10]], [[8, 8], [9, 10], [9, 10], [9, 9], [9, 10], [11, 11]], [[8, 8], [9, 10], [9, 10], [9, 9], [9, 10], [11, 11]], [[8, 8], [10, 10], [10, 10], [9, 10], [9, 10], [9, 9], [9, 10], [11, 11]], [[8, 8], [9, 10], [9, 10], [9, 9], [9, 10], [11, 11]], [[11, 11], [11, 11]], [[2, 2], [3, 3], [8, 8]], [[2, 5], [6, 6]]] 
+    
+    dependencies = [[[], [23, 25], [0]], [[], [10, 13], [1]], [[], [32], [2]], [[], [33], [3]], [[], [14, 15, 16, 17, 18, 26, 27, 28, 29, 30], [4]], [[], [14, 15, 16, 17, 18, 26, 27, 28, 29, 30], [5]], [[], [14, 15, 16, 17, 18, 26, 27, 28, 29, 30], [6]], [[], [19, 20, 21, 26, 27, 28, 29, 30], [7]], [[], [19, 20, 21, 26, 27, 28, 29, 30], [8]], [[], [19, 20, 21, 26, 27, 28, 29, 30], [9]], [[32, 1], [14, 15, 16, 17, 18], [10]], [[20], [31], [11]], [[20], [31], [12]], [[1, 29], [31], [13]], [[10, 4, 6, 5, 24], [], [14, 15, 16, 17, 18]], [[10, 4, 6, 5, 24], [19, 20, 21, 31], [14, 15, 16, 17, 18]], [[10, 4, 6, 5, 24], [19, 20, 21, 31], [14, 15, 16, 17, 18]], [[10, 4, 6, 5, 24], [31], [14, 15, 16, 17, 18]], [[10, 4, 6, 5, 24], [31], [14, 15, 16, 17, 18]], [[16, 33, 7, 24, 9, 8, 15], [], [19, 20, 21]], [[16, 33, 7, 24, 9, 8, 15], [11, 12, 26, 27, 28, 29, 30], [19, 20, 21]], [[16, 33, 7, 24, 9, 8, 15], [31], [19, 20, 21]], [[23], [31], [22]], [[0], [22], [23]], [[25], [14, 15, 16, 17, 18, 19, 20, 21, 31], [24]], [[0], [24], [25]], [[4, 6, 32, 9, 20, 8, 5, 7], [], [26, 27, 28, 29, 30]], [[4, 6, 32, 9, 20, 8, 5, 7], [31], [26, 27, 28, 29, 30]], [[4, 6, 32, 9, 20, 8, 5, 7], [31], [26, 27, 28, 29, 30]], [[4, 6, 32, 9, 20, 8, 5, 7], [13, 31], [26, 27, 28, 29, 30]], [[4, 6, 32, 9, 20, 8, 5, 7], [31], [26, 27, 28, 29, 30]], [[11, 18, 22, 15, 24, 13, 12, 16, 21, 27, 29, 28, 17, 30], [], []], [[2], [10, 26, 27, 28, 29, 30], [32]], [[3], [19, 20, 21], [33]]] 
+    logical_buffer_size = [8, 4, 524288, 2097152, 4, 8, 4, 8, 4, 4, 2048, 524288, 524288, 4, 32, 2097152, 2097152, 2097152, 2097152, 16, 2048, 2097152, 1024, 1024, 4096, 4096, 32, 524288, 524288, 1024, 524288, 112, 524288, 2097152] 
     no_succ_buffer = [] 
-    min_peak_memory = 13113460 # 12
-    max_memory_usage = 18365680 # 12
+    min_peak_memory = 13113460
+    max_memory_usage = 18365680
     persistent_buffer = []
     buffer_alias = []
 

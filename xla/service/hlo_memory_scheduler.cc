@@ -150,6 +150,45 @@ class RoamScheduler {
           points_to_analysis_(points_to_analysis),
           size_function_(size_function),
           memory_by_computation_(memory_by_computation) {
+      // Create a map containing the LogicalBuffer uses for each HLO
+      // instruction. An HLO instruction "uses" a LogicalBuffer if the
+      // LogicalBuffer is in an operand of the instruction as indicated by
+      // points-to analysis.
+      for (auto* instruction : computation->instructions()) {
+        absl::flat_hash_set<const LogicalBuffer*> instr_uses;
+        for (auto* operand : instruction->operands()) {
+          points_to_analysis.GetPointsToSet(operand).ForEachElement(
+              [&](const ShapeIndex& /*index*/,
+                  const PointsToSet::BufferList& buffers) {
+                instr_uses.insert(buffers.begin(), buffers.end());
+              });
+        }
+        buffer_uses_[instruction] = std::vector<const LogicalBuffer*>(
+            instr_uses.begin(), instr_uses.end());
+      }
+
+      // Create map containing the number of unscheduled uses (hlo instructions)
+      // of each logical buffer.
+      unscheduled_use_count_.reserve(points_to_analysis.num_logical_buffers());
+      for (auto* instruction : computation->instructions()) {
+        for (auto* buffer :
+            points_to_analysis.GetBuffersDefinedByInstruction(instruction)) {
+          unscheduled_use_count_[buffer] = 0;
+        }
+      }
+      for (auto* instruction : computation->instructions()) {
+        for (const LogicalBuffer* buffer : buffer_uses_.at(instruction)) {
+          ++unscheduled_use_count_[buffer];
+        }
+      }
+
+      // Buffers live out of the computation have an implicit use at the end of
+      // the computation.
+      for (const LogicalBuffer* live_out_buffer :
+          points_to_analysis.GetPointsToSet(computation->root_instruction())
+              .CreateFlattenedSet()) {
+        ++unscheduled_use_count_[live_out_buffer];
+      }
     }
     
     HloComputation* computation_;
@@ -157,11 +196,19 @@ class RoamScheduler {
     const BufferValue::SizeFunction& size_function_;
     const absl::flat_hash_map<const HloComputation*, int64_t> memory_by_computation_;
     
+    // Support ListMemory Scheduler for instructions scheduled at the same time in ILP results.
+    // A map containing the LogicalBuffers that each instruction uses.
+    absl::flat_hash_map<const HloInstruction*, std::vector<const LogicalBuffer*>>
+        buffer_uses_;
+    // A map containing the count of unscheduled HLOs which using a particular
+    absl::flat_hash_map<const LogicalBuffer*, int64_t> unscheduled_use_count_;
+
     absl::flat_hash_map<const HloInstruction*, int64_t> asap_;
     absl::flat_hash_map<const HloInstruction*, int64_t> alap_;
     std::vector<std::tuple<int64_t, HloInstruction*>> memory_insensitive_points_; 
 
     absl::flat_hash_map<const LogicalBuffer*, int64_t> logical_buffer_unique_id_;
+    absl::flat_hash_map<int64_t, const LogicalBuffer*> unique_id_logical_buffer_;
     std::vector<std::vector<std::vector<int64_t>>> max_useful_liverange_;
     std::vector<std::vector<std::vector<int64_t>>> dependencies_;
     std::vector<int64_t> logical_buffer_size_;
@@ -174,26 +221,102 @@ class RoamScheduler {
 
     // Compute ASAP time of nodes.
     int64_t ComputeASAPTime(HloInstruction*);
+    int64_t ComputeASAPMSTime(HloInstruction*);
 
     // Compute ALAP time of nodes.
     int64_t ComputeALAPTime(HloInstruction*);
+    int64_t ComputeALAPMSTime(HloInstruction*, int64_t);
 
     // Update memory_insensitive_points_.
     Status SearchMemoryInsensitivePoints();
 
     Status ExtractGraphInformation();
     
-    // TODO(HuiyaoShu.HYS): feat call python solver.
-    /*
-      -ret: generate time of logical buffers
-    */
-    void CallSolver();
+    absl::flat_hash_map<int64_t, int64_t> CallSolver();
 
     HloInstructionSequence CreateSchedule();
 };
 
 
-void RoamScheduler::CallSolver() {
+HloInstructionSequence RoamScheduler::CreateSchedule() {
+  // Get necessary information needed by ILP Solver.
+  TF_CHECK_OK(ExtractGraphInformation());
+  
+  // Call Solver.
+  absl::flat_hash_map<int64_t, std::vector<int64_t>> created_time = CallSolver();
+
+  // Transfer the created time to instruction sequence.
+  // HloInstructionSequence schedule;
+  std::list<HloInstruction*> list_instructions;
+  absl::flat_hash_map<HloInstruction*> scheduled_instructions;
+  int64_t schedule_index = 0;
+  for (auto op : created_time) {
+    std::vector<int64_t> buffer_ids = op.second;
+
+    // Sort instructions according to the priority of instruction.
+    std::map<int64_t, HloInstruction*> undecided_instructions;
+    for (auto id : buffer_ids) {
+      LogicalBuffer* buffer = unique_id_logical_buffer_[id];
+      HloInstruction* source = instruction;
+      
+      int64_t defined_bytes = 0;
+      auto defined_buffers = points_to_analysis_.GetBuffersDefinedByInstruction(source);
+      for (auto buffer : defined_buffers) {
+        defined_bytes += size_function_(*defined_buffers);
+      }
+
+      int64_t freed_bytes = 0;
+      for (auto operand : source->operands()) {
+        points_to_analysis_.GetPointsToSet(operand).ForEachElement(
+          [&] (const ShapeIndex&,
+              const PointsToSet::BufferList& buffers) {
+            if (unscheduled_use_count_[buffer] == 0) {
+              freed_bytes += size_function_(*buffer);
+            }
+          }
+        );
+      }
+
+      undecided_instructions[freed_bytes - defined_bytes] = source;
+    }
+
+    while (undecided_instructions.size() > 0) {
+      auto best = undecided_instructions.end();
+      --best;
+      list_instructions.push_back(best.second);
+      scheduled_instructions[best.second] = schedule_index++;
+    }
+  }
+
+  // Insert elememt-wise instruction into the sequence.
+  for (HloInstruction* curr_instr : computation_->instructions()) {
+    if (scheduled_instructions.find(curr_instr) != 
+        scheduled_instructions.end()) {
+      continue;
+    }
+
+    // Get last index of users.
+    int64_t min_index = 0;
+    for (auto user : curr_instr->users()) {
+      min_index = std::min(scheduled_instructions[user], last_index);
+    }
+
+    auto it = std::next(list_instructions.begin(), min_index);
+    list_instructions.insert(it, curr_instr);
+  }
+
+  HloInstructionSequence schedule;
+  for (auto instruction : list_instructions) {
+    schedule.push_back(instruction);
+  }
+
+  return schedule;
+}
+
+
+std::map<int64_t, std::vector<int>> RoamScheduler::CallSolver() {
+  std::map<int64_t, std::vector<int>> created;
+
   PyGILState_STATE gstate = PyGILState_Ensure();
   {
     // Import roam.
@@ -221,31 +344,44 @@ void RoamScheduler::CallSolver() {
       exit(-1);
     }
 
-    // TODO(HuiyaoShu): Deal with output.
-
+    int64_t num_logical_buffers = logical_buffer_size_.size();
+    for (int i = 0; i < num_logical_buffers; ++i) {
+      int64_t time = ret[i];
+      created_time[time].push_back(i);
+    }
   }
   PyGILState_Release(gstate);
 
-  // TODO(HuiyaoShu): Return solver results.
-
+  return created_time;  
 }
 
 
 Status RoamScheduler::ExtractGraphInformation() {
   // Obtain asap/alap time of all instructions.
-  int64_t num_instruction = computation_->instruction_count();
+  // int64_t num_instruction = computation_->instruction_count();
+  HloInstruction* root = computation_->root_instruction();
+  ComputeASAPMSTime(root);
+  VLOG(1) << "ASAPMS time of root instruction: " << asap_[root];
+  int64_t max_timesteps = asap_[root];
   for (auto instruction : computation_->instructions()) {
-    if (instruction->opcode() == HloOpcode::kParameter || 
-        instruction->opcode() == HloOpcode::kConstant) {
-      continue;
-    }
+    // if (instruction->opcode() == HloOpcode::kParameter || 
+    //     instruction->opcode() == HloOpcode::kConstant) {
+    //   continue;
+    // }
 
-    asap_[instruction] = ComputeASAPTime(instruction);
-    alap_[instruction] = num_instruction - ComputeALAPTime(instruction) + 1;
+    if (asap_.find(instruction) == asap_.end()) {
+      ComputeASAPMSTime(instruction);
+    }
+    
+    if (alap_.find(instruction) == asap_.end()) {
+      ComputeALAPMSTime(instruction, max_timesteps);
+    }
+    // asap_[instruction] = ComputeASAPTime(instruction);
+    // alap_[instruction] = num_instruction - ComputeALAPTime(instruction) + 1;
   
     VLOG(1) << "HloInstruction " << instruction->ToShortString()
             << ": asap=" << asap_[instruction]
-            <<  " alap=" << alap_[instruction];
+            << " alap=" << alap_[instruction];
   }
 
   // Get the number of logical buffers in the current computation.
@@ -254,7 +390,8 @@ Status RoamScheduler::ExtractGraphInformation() {
     auto fanouts = points_to_analysis_.GetBuffersDefinedByInstruction(curr_instr);
     for (auto buffer : fanouts) {
       VLOG(1) << "Init buffer: " << buffer->ToString() << " with id=" << num_logical_buffers;
-      logical_buffer_unique_id_[buffer] = num_logical_buffers++;
+      logical_buffer_unique_id_[buffer] = num_logical_buffers;
+      unique_id_logical_buffer_[num_logical_buffers++] = buffer;
     }
   }
 
@@ -381,7 +518,6 @@ Status RoamScheduler::ExtractGraphInformation() {
   return OkStatus();
 }
 
-
 // Need to be optimized.
 int64_t RoamScheduler::ComputeASAPTime(HloInstruction* instruction) {
   absl::flat_hash_set<HloInstruction*> traversed;
@@ -412,6 +548,30 @@ int64_t RoamScheduler::ComputeASAPTime(HloInstruction* instruction) {
   return traversed.size() - traversed_param;
 }
 
+int64_t RoamScheduler::ComputeASAPMSTime(HloInstruction* instruction) {
+  // VLOG(1) << "Compute ASAPMS time for instruction: " << instruction->ToShortString();
+  if (asap_.find(instruction) != asap_.end()) {
+    // VLOG(1) << "Get existed ASAPMS value: " << asap_[instruction] 
+    //         << " of instruction: " << instruction->ToShortString();
+
+    return asap_[instruction];
+  }
+
+  int64_t time = 1;
+  // TODO(HuiyaoShu): validate the operands function.
+  auto operands = instruction->operands();
+  for (auto ope : operands) {
+    // VLOG(1) << "Operand: " << ope->ToShortString() 
+    //         << " of instruction: " << instruction->ToShortString();
+    int64_t t = ComputeASAPMSTime(ope);
+    time = std::max(t + 1, time);
+  }
+
+  asap_[instruction] = time;
+
+  return time;
+}
+
 int64_t RoamScheduler::ComputeALAPTime(HloInstruction* instruction) {
   absl::flat_hash_set<HloInstruction*> traversed;
   std::vector<HloInstruction*> BFS = {instruction};
@@ -437,6 +597,25 @@ int64_t RoamScheduler::ComputeALAPTime(HloInstruction* instruction) {
   }
 
   return traversed.size() - traversed_param;
+}
+
+int64_t RoamScheduler::ComputeALAPMSTime(HloInstruction* instruction, int64_t max_timesteps) {
+  // VLOG(1) << "Compute ALAPMS time for instruction: " << instruction->ToShortString()
+  //         << " Max timesteps: " << max_timesteps;
+  if (alap_.find(instruction) != alap_.end()) {
+    return alap_[instruction];
+  }
+
+  int64_t time = max_timesteps;
+  auto users = instruction->users();
+  for (auto user : users) {
+    int64_t t = ComputeALAPMSTime(user, max_timesteps);
+    time = std::min(time, t - 1);
+  }
+
+  alap_[instruction] = time;
+
+  return time;
 }
 
 Status RoamScheduler::SearchMemoryInsensitivePoints() {
