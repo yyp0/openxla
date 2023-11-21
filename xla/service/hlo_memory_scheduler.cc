@@ -49,7 +49,7 @@ namespace py = pybind11;
 
 class RoamScheduler {
   public:
-    static Status Run(
+    static StatusOr<HloInstructionSequence> Run(
         HloComputation* computation,
         const TuplePointsToAnalysis& points_to_analysis,
         const BufferValue::SizeFunction& size_function,
@@ -58,86 +58,7 @@ class RoamScheduler {
       RoamScheduler scheduler(computation, points_to_analysis, size_function, 
                               memory_by_computation);
 
-      // return scheduler.CreateSchedule();
-      // TF_CHECK_OK(scheduler.SearchMemoryInsensitivePoints());
-      TF_CHECK_OK(scheduler.ExtractGraphInformation());
-      // int64_t meta_size = points_to_analysis.num_logical_buffers();
-      int64_t num_logical_buffers = 0;
-      for (HloInstruction* curr_instr : computation->instructions()) {
-        auto fanouts = points_to_analysis.GetBuffersDefinedByInstruction(curr_instr);
-        for (auto buffer : fanouts) {
-          num_logical_buffers++;
-        }
-      }
-      VLOG(1) << "Num logical buffers: " << num_logical_buffers;
-
-      // Print unique_id of logical buffers.
-      VLOG(1) << "Check unique id of logical buffers";
-      for (auto ele : scheduler.logical_buffer_unique_id_) {
-        VLOG(1) << "Logical buffer: " << ele.first->ToString() 
-                << " id: " << ele.second;
-      }
-
-      // Print MUL information.
-      VLOG(1) << "Check max useful liverange information";
-      for (int i = 0; i < num_logical_buffers; ++i) {
-        std::cout << "Buffer id: " << i << " ";
-        for (int j = 0; j < scheduler.max_useful_liverange_[i].size(); ++j) {
-          std::cout << "(";
-          for (int k = 0; k < scheduler.max_useful_liverange_[i][j].size(); ++k) {
-            std::cout << scheduler.max_useful_liverange_[i][j][k] << ",";
-          }
-          std::cout << ") ";
-        }
-        std::cout << std::endl;
-      }
-
-      // Print data information of the graph.
-      VLOG(1) << "Check dependencies information: ";
-      for (int i = 0; i < num_logical_buffers; ++i) {
-        VLOG(1) << "Dependencies of buffer id: " << i;
-        for (int j = 0; j < scheduler.dependencies_[i].size(); ++j) {
-          std::string relation = "default: ";
-          if (j == 0) {
-            relation = "predecencies: ";
-          } else if (j == 1) {
-            relation = "successors: ";
-          } else if (j == 2) {
-            relation = "siblings: ";
-          }
-
-          VLOG(1) << relation;
-          for (int k = 0; k < scheduler.dependencies_[i][j].size(); ++k) {
-            std::cout << scheduler.dependencies_[i][j][k] << " ";
-          }
-          std::cout << std::endl;
-        }
-      }
-
-      // Check logical buffer size.
-      VLOG(1) << "Begin to check buffer size: ";
-      for (int i = 0; i < scheduler.logical_buffer_size_.size(); ++i) {
-        VLOG(1) << "Buffer id: " << i << " size: " << scheduler.logical_buffer_size_[i];
-      }
-
-      // Check no succ buffers.
-      VLOG(1) << "Begin to check no successors buffer: ";
-      for (int i = 0; i < scheduler.no_succ_buffer_.size(); ++i) {
-        VLOG(1) << "Group " << i << ": ";
-        for (int j = 0; j < scheduler.no_succ_buffer_[i].size(); ++j) {
-          std::cout << scheduler.no_succ_buffer_[i][j] << ",";
-        }
-        std::cout << std::endl;
-      }
-
-      // Check min_peak_memory and max_memory_usage.
-      VLOG(1) << "min_peak_memory=" << scheduler.min_peak_memory << \
-                " max_memory_usage=" << scheduler.max_memory_usage;
-
-      // Check the execution of CallSolverSerialized.
-      scheduler.CallSolver();
-
-      return OkStatus();
+      return scheduler.CreateSchedule();
     }
 
   private:
@@ -232,7 +153,7 @@ class RoamScheduler {
 
     Status ExtractGraphInformation();
     
-    absl::flat_hash_map<int64_t, int64_t> CallSolver();
+    std::map<int64_t, std::vector<int64_t>> CallSolver();
 
     HloInstructionSequence CreateSchedule();
 };
@@ -240,29 +161,35 @@ class RoamScheduler {
 
 HloInstructionSequence RoamScheduler::CreateSchedule() {
   // Get necessary information needed by ILP Solver.
+  VLOG(2) << "Step 1: extract graph information.";
   TF_CHECK_OK(ExtractGraphInformation());
   
   // Call Solver.
-  absl::flat_hash_map<int64_t, std::vector<int64_t>> created_time = CallSolver();
+  VLOG(2) << "Step 2: call the solver.";
+  std::map<int64_t, std::vector<int64_t>> created_time = CallSolver();
 
+  
   // Transfer the created time to instruction sequence.
-  // HloInstructionSequence schedule;
+  VLOG(2) << "Step 3: start to generate schedule sequence from the solver result.";
   std::list<HloInstruction*> list_instructions;
-  absl::flat_hash_map<HloInstruction*> scheduled_instructions;
+  absl::flat_hash_map<HloInstruction*, int64_t> scheduled_instructions;
   int64_t schedule_index = 0;
   for (auto op : created_time) {
+    int64_t time = op.first;
     std::vector<int64_t> buffer_ids = op.second;
 
+    VLOG(1) << "Begin to analyze the priority of instructions at timestep " 
+            << time << ".";
     // Sort instructions according to the priority of instruction.
-    std::map<int64_t, HloInstruction*> undecided_instructions;
+    std::multimap<int64_t, HloInstruction*> undecided_instructions;
     for (auto id : buffer_ids) {
-      LogicalBuffer* buffer = unique_id_logical_buffer_[id];
-      HloInstruction* source = instruction;
+      auto curr_buffer = unique_id_logical_buffer_[id];
+      HloInstruction* source = curr_buffer->instruction();
       
       int64_t defined_bytes = 0;
       auto defined_buffers = points_to_analysis_.GetBuffersDefinedByInstruction(source);
       for (auto buffer : defined_buffers) {
-        defined_bytes += size_function_(*defined_buffers);
+        defined_bytes += size_function_(*buffer);
       }
 
       int64_t freed_bytes = 0;
@@ -270,52 +197,99 @@ HloInstructionSequence RoamScheduler::CreateSchedule() {
         points_to_analysis_.GetPointsToSet(operand).ForEachElement(
           [&] (const ShapeIndex&,
               const PointsToSet::BufferList& buffers) {
-            if (unscheduled_use_count_[buffer] == 0) {
-              freed_bytes += size_function_(*buffer);
+            for (auto buffer : buffers) {
+              if (unscheduled_use_count_[buffer] == 0) {
+                freed_bytes += size_function_(*buffer);
+              }
             }
           }
         );
       }
 
-      undecided_instructions[freed_bytes - defined_bytes] = source;
+      // undecided_instructions[freed_bytes - defined_bytes] = source;
+      undecided_instructions.emplace(freed_bytes - defined_bytes, source);
+
+      VLOG(3) << "The priority of instruction " << source->ToShortString() << " is " << freed_bytes - defined_bytes;
     }
 
     while (undecided_instructions.size() > 0) {
       auto best = undecided_instructions.end();
       --best;
-      list_instructions.push_back(best.second);
-      scheduled_instructions[best.second] = schedule_index++;
+      HloInstruction* best_instr = best->second;
+      if (scheduled_instructions.find(best_instr) != 
+          scheduled_instructions.end()) {
+        undecided_instructions.erase(best);
+        continue;
+      }
+
+      list_instructions.push_back(best_instr);
+      scheduled_instructions[best_instr] = schedule_index++;
+      undecided_instructions.erase(best);
     }
   }
 
-  // Insert elememt-wise instruction into the sequence.
-  for (HloInstruction* curr_instr : computation_->instructions()) {
+  // Insert element-wise instructions into the sequence.
+  std::vector<HloInstruction*> post_order = computation_->MakeInstructionPostOrder();
+  for (int i = post_order.size() - 1; i >= 0; --i) {
+    HloInstruction* curr_instr = post_order[i];
+
     if (scheduled_instructions.find(curr_instr) != 
         scheduled_instructions.end()) {
       continue;
     }
 
-    // Get last index of users.
-    int64_t min_index = 0;
+    // Get min index of users.
+    int64_t min_index = INT_MAX;
+    HloInstruction* insert_instr = nullptr;
     for (auto user : curr_instr->users()) {
-      min_index = std::min(scheduled_instructions[user], last_index);
+      if (scheduled_instructions.find(user) == 
+          scheduled_instructions.end()) {
+        continue;
+      }
+
+      if (scheduled_instructions[user] < min_index) {
+        min_index = scheduled_instructions[user];
+        insert_instr = user;
+
+        VLOG(3) << "Change the earliest user of instruction " 
+                << curr_instr->ToShortString() << " to " << user->ToShortString()
+                << " at timestep " << min_index;
+      }
     }
 
-    auto it = std::next(list_instructions.begin(), min_index);
-    list_instructions.insert(it, curr_instr);
+    if (insert_instr != nullptr) {
+      VLOG(2) << "Insert instruction " << curr_instr->ToShortString() 
+            << " at timestep " << min_index
+            << " before " << insert_instr->ToShortString();
+      
+      auto it = std::next(list_instructions.begin(), min_index);
+      list_instructions.insert(it, curr_instr);
+      scheduled_instructions[curr_instr] = min_index;
+      
+      for (auto& item : scheduled_instructions) {
+        if (item.second >= min_index and item.first != curr_instr) {
+          ++item.second;
+        }
+      }
+    } else {
+      VLOG(1) << "Not inserted instruction: " << curr_instr->ToShortString();
+    }
   }
 
+  int64_t schedule_time = 0;
   HloInstructionSequence schedule;
   for (auto instruction : list_instructions) {
+    VLOG(1) << "Schedule " << instruction->ToShortString() << " at timestep " << schedule_time++;
     schedule.push_back(instruction);
   }
+  CHECK_EQ(schedule.size(), computation_->instruction_count());
 
   return schedule;
 }
 
 
-std::map<int64_t, std::vector<int>> RoamScheduler::CallSolver() {
-  std::map<int64_t, std::vector<int>> created;
+std::map<int64_t, std::vector<int64_t>> RoamScheduler::CallSolver() {
+  std::map<int64_t, std::vector<int64_t>> created;
 
   PyGILState_STATE gstate = PyGILState_Ensure();
   {
@@ -344,15 +318,18 @@ std::map<int64_t, std::vector<int>> RoamScheduler::CallSolver() {
       exit(-1);
     }
 
-    int64_t num_logical_buffers = logical_buffer_size_.size();
-    for (int i = 0; i < num_logical_buffers; ++i) {
-      int64_t time = ret[i];
-      created_time[time].push_back(i);
+    VLOG(1) << "Start to analyze the py result.";
+    py::dict solver_res = ret.cast<py::dict>();
+    for (const auto& item : solver_res) {
+      int64_t id = item.first.cast<int64_t>();
+      int64_t time = item.second.cast<int64_t>();
+      created[time].push_back(id); 
     }
+    VLOG(1) << "Finish the analysis of py result.";
   }
   PyGILState_Release(gstate);
 
-  return created_time;  
+  return created;  
 }
 
 
@@ -468,7 +445,7 @@ Status RoamScheduler::ExtractGraphInformation() {
       if (max_useful_liverange_[curr_buffer_id].size() == 0) {
         max_useful_liverange_[curr_buffer_id].push_back({asap_l, alap_l});
       }
-      VLOG(1) << "Buffer id: " << curr_buffer_id << " snk: " << curr_instr->ToString();
+      VLOG(1) << "Buffer id: " << curr_buffer_id << " snk: " << curr_instr->ToShortString();
       max_useful_liverange_[curr_buffer_id].push_back({asap_r, alap_r});
 
       // Get the siblings logical buffers.
@@ -1168,6 +1145,32 @@ ModuleSchedulerAlgorithm ComputationSchedulerToModuleScheduler(
   };
 }
 
+StatusOr<HloInstructionSequence> RoamMemoryScheduler(
+    HloComputation* computation,
+    const TuplePointsToAnalysis& points_to_analysis,
+    const HloAliasAnalysis& alias_analysis, 
+    const BufferValue::SizeFunction& size_function,
+    const absl::flat_hash_map<const HloComputation*, int64_t>&
+        memory_by_computation,
+    const MemorySchedulerPostprocessor& postprocessor, int64_t* peak_memory) {
+  TF_ASSIGN_OR_RETURN(HloInstructionSequence sequence,
+                      RoamScheduler::Run(computation, points_to_analysis, 
+                                         size_function, memory_by_computation));
+
+  if (postprocessor) {
+    sequence = postprocessor(sequence);
+  }
+
+  if (peak_memory) {
+    TF_ASSIGN_OR_RETURN(
+        *peak_memory, HeapSimulator::MinimumMemoryForComputation(
+                          *computation, sequence, alias_analysis, size_function,
+                          &memory_by_computation));
+  }
+  
+  return sequence;
+}
+
 StatusOr<HloInstructionSequence> ListMemoryScheduler(
     HloComputation* computation,
     const TuplePointsToAnalysis& points_to_analysis,
@@ -1180,9 +1183,9 @@ StatusOr<HloInstructionSequence> ListMemoryScheduler(
                       ListScheduler::Run(computation, points_to_analysis,
                                          size_function, memory_by_computation));
   
-  // Test RoamScheduler.
-  TF_CHECK_OK(RoamScheduler::Run(computation, points_to_analysis,
-                                 size_function, memory_by_computation));
+  // // Test RoamScheduler.
+  // TF_CHECK_OK(RoamScheduler::Run(computation, points_to_analysis,
+  //                                size_function, memory_by_computation));
 
   if (postprocessor) {
     sequence = postprocessor(sequence);
@@ -1225,6 +1228,16 @@ StatusOr<HloInstructionSequence> DefaultMemoryScheduler(
     const absl::flat_hash_map<const HloComputation*, int64_t>&
         memory_by_computation,
     const MemorySchedulerPostprocessor& postprocessor, int64_t* peak_memory) {
+  // Support optimization with interger linea program method in full graph mode.
+  int64_t solver_memory;
+  TF_ASSIGN_OR_RETURN(
+      HloInstructionSequence solver_sequence,
+      RoamMemoryScheduler(computation, points_to_analysis, alias_analysis,
+                          size_function, memory_by_computation, postprocessor,
+                          &solver_memory));
+
+  VLOG(1) << "Min-memory solver(full graph) sequence: " << HumanReadableNumBytes(solver_memory);
+
   // We try a few schedulers and choose whichever returns a lower min-memory,
   // not accounting for fragmentation.
   // - List is a scheduler that uses greedy heuristics.
@@ -1239,7 +1252,7 @@ StatusOr<HloInstructionSequence> DefaultMemoryScheduler(
       ListMemoryScheduler(computation, points_to_analysis, alias_analysis,
                           size_function, memory_by_computation, postprocessor,
                           &list_memory));
-  VLOG(2) << "Min-memory list sequence: " << HumanReadableNumBytes(list_memory);
+  VLOG(1) << "Min-memory list sequence: " << HumanReadableNumBytes(list_memory);
 
   int64_t dfs_memory;
   TF_ASSIGN_OR_RETURN(
@@ -1247,7 +1260,7 @@ StatusOr<HloInstructionSequence> DefaultMemoryScheduler(
       DFSMemoryScheduler(computation, points_to_analysis, alias_analysis,
                          size_function, memory_by_computation, postprocessor,
                          &dfs_memory));
-  VLOG(2) << "Min-memory dfs sequence: " << HumanReadableNumBytes(dfs_memory);
+  VLOG(1) << "Min-memory dfs sequence: " << HumanReadableNumBytes(dfs_memory);
 
   int64_t post_order_memory;
   TF_ASSIGN_OR_RETURN(
@@ -1255,24 +1268,29 @@ StatusOr<HloInstructionSequence> DefaultMemoryScheduler(
       PostOrderMemoryScheduler(computation, points_to_analysis, alias_analysis,
                                size_function, memory_by_computation,
                                postprocessor, &post_order_memory));
-  VLOG(2) << "Min-memory post order sequence: "
+  VLOG(1) << "Min-memory post order sequence: "
           << HumanReadableNumBytes(post_order_memory);
 
-  auto min_memory = std::min({dfs_memory, post_order_memory, list_memory});
+  auto min_memory = std::min({dfs_memory, post_order_memory, list_memory, solver_memory});
   if (peak_memory) {
     *peak_memory = min_memory;
   }
 
-  if (min_memory == list_memory) {
-    VLOG(2) << "Chose min-memory list sequence: "
+  if (min_memory == solver_memory) {
+    VLOG(1) << "Chose min-memory solver sequence: "
+            << HumanReadableNumBytes(solver_memory);
+    return solver_sequence;
+  }
+  else if (min_memory == list_memory) {
+    VLOG(1) << "Chose min-memory list sequence: "
             << HumanReadableNumBytes(list_memory);
     return list_sequence;
   } else if (min_memory == dfs_memory) {
-    VLOG(2) << "Chose min-memory dfs sequence: "
+    VLOG(1) << "Chose min-memory dfs sequence: "
             << HumanReadableNumBytes(dfs_memory);
     return dfs_sequence;
   } else {
-    VLOG(2) << "Chose min-memory post_order sequence: "
+    VLOG(1) << "Chose min-memory post_order sequence: "
             << HumanReadableNumBytes(post_order_memory);
     return post_order_sequence;
   }
