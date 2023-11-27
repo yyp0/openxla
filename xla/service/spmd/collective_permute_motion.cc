@@ -242,13 +242,13 @@ StatusOr<bool> MoveCollectivePermutes(HloComputation* computation,
       continue;
     }
     HloInstruction* input = input_gtes[cluster->root_tuple_index];
+    const std::vector<HloInstruction*> original_input_users = input->users();
     HloInstruction* cp = cluster->collective_permute;
     if (input == nullptr || cp->operand(0) == input) {
       VLOG(2) << "Skip " << loop->name() << " index " << i
               << " collective-permute already at top.";
       continue;
     }
-    const std::vector<HloInstruction*> original_input_users = input->users();
     absl::flat_hash_map<const HloInstruction*, HloInstruction*> replacement;
     replacement[cp->operand(0)] = input;
     for (auto it = cluster->reverse_order_instructions.rbegin();
@@ -309,8 +309,6 @@ StatusOr<bool> CollectivePermuteMotion::Run(
       }
     }
   }
-
-  VLOG(1) << "Finish CollectivePermuteMotion pass.";
   return changed;
 }
 

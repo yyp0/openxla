@@ -2635,6 +2635,7 @@ cc_library(
         "//xla/hlo/transforms:hlo_constant_splitter",
         "//xla/mlir/backends/gpu/transforms:passes",
         "//xla/mlir/runtime/transforms:compilation_pipeline_gpu",
+        "//xla/service/spmd:alpa_compiler",
         "//xla/runtime:jit_executable",
         "//xla/service:algebraic_simplifier",
         "//xla/service:all_gather_broadcast_reorder",

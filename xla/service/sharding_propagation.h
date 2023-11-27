@@ -76,7 +76,7 @@ class ShardingPropagation : public HloModulePass {
   explicit ShardingPropagation(
       bool is_spmd = false, bool propagate_metadata = false,
       absl::Span<const bool> allow_spmd_sharding_propagation_to_output =
-          {false},
+          {true},
       absl::Span<const bool> allow_spmd_sharding_propagation_to_parameters =
           {false},
       bool cse_prevention_only = false,

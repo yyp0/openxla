@@ -1401,4 +1401,18 @@ bool HloCostAnalysis::KeyToCopyFromSubcomputation(absl::string_view key) const {
          !absl::StartsWith(key, kUtilizationKey);
 }
 
+double CountFlopDotConvOnly(const HloComputation& computation) {
+  auto analysis = absl::make_unique<HloCostAnalysis>([](const Shape&) { return 0; });
+  TF_CHECK_OK(computation.Accept(analysis.get()));
+
+  double ret = 0.0;
+  for (const HloInstruction* instruction : computation.instructions()) {
+    if (instruction->opcode() == HloOpcode::kDot ||
+        instruction->opcode() == HloOpcode::kConvolution) {
+      ret += analysis->flop_count(*instruction);
+    }
+  }
+  return ret;
+}
+
 }  // namespace xla

@@ -39,6 +39,9 @@ limitations under the License.
 #include "xla/xla_data.pb.h"
 #include "tsl/platform/errors.h"
 
+// Added by Alpa
+#include "xla/service/spmd/grad_acc_rewrite.h"
+
 namespace xla {
 namespace {
 
@@ -85,6 +88,11 @@ Status CombineAllReduces(absl::Span<HloInstruction* const> to_combine) {
       Cast<HloAllReduceInstruction>(to_combine.front())
           ->use_global_device_ids()));
 
+  // Added by alpa.
+  if (to_combine.front()->metadata().op_name() == spmd::kSkippableAllReduce) {
+    combined->set_metadata_op_name(spmd::kSkippableAllReduce);
+  }
+
   // We have to propagate the sharding manually because Domain instructions are
   // not guaranteed to preserve it for side effecting instructions.
   combined->set_sharding(
@@ -107,6 +115,12 @@ AllReduceCombiner::AllReduceCombiner(int64_t combine_threshold_in_bytes,
                                      int64_t combine_threshold_count)
     : combine_threshold_in_bytes_(combine_threshold_in_bytes),
       combine_threshold_count_(combine_threshold_count) {}
+
+// Added by Alpa.
+// Add a new boolean field to the original AllReduceKey.
+// This field indicates whether the all-reduce is a skippable
+// all-reduce for gradient accumulation.
+using AllReduceKeyWithSkip = std::tuple<AllReduceKey, bool>;
 
 StatusOr<bool> AllReduceCombiner::Run(
     HloModule* module,
@@ -132,16 +146,26 @@ StatusOr<bool> AllReduceCombiner::Run(
 
     auto key_fn =
         [&domain_map](
-            const HloInstruction* instruction) -> std::optional<AllReduceKey> {
+            // Modified by Alpa, same as below.
+            // const HloInstruction* instruction) -> std::optional<AllReduceKey> {
+            const HloInstruction* instruction) -> std::optional<AllReduceKeyWithSkip> { 
       if (instruction->opcode() != HloOpcode::kAllReduce) {
         return std::nullopt;
       }
-      return GetAllReduceKey(instruction, domain_map.get());
+      // return GetAllReduceKey(instruction, domain_map.get());
+      auto old_key = GetAllReduceKey(instruction, domain_map.get());
+      if (!old_key.has_value()) {
+        return absl::nullopt;
+      }
+      return AllReduceKeyWithSkip{
+        *old_key,
+        instruction->metadata().op_name() == spmd::kSkippableAllReduce};
     };
 
     TF_ASSIGN_OR_RETURN(
         bool computation_changed,
-        CombineInstructionsByKey<AllReduceKey>(
+        // CombineInstructionsByKey<AllReduceKey>(
+        CombineInstructionsByKey<AllReduceKeyWithSkip>(
             computation, key_fn, &CombineAllReduces,
             combine_threshold_in_bytes_, combine_threshold_count_));
     changed |= computation_changed;

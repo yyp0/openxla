@@ -15,7 +15,7 @@ limitations under the License.
 
 #include "xla/service/hlo_memory_scheduler.h"
 
-#include <pybind11/stl.h>
+#include "pybind11/stl.h"
 
 #include <algorithm>
 #include <limits>
