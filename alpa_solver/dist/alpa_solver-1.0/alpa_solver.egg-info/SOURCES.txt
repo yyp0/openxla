@@ -1,0 +1,8 @@
+setup.cfg
+setup.py
+alpa/__init__.py
+alpa/auto_sharding.py
+alpa_solver.egg-info/PKG-INFO
+alpa_solver.egg-info/SOURCES.txt
+alpa_solver.egg-info/dependency_links.txt
+alpa_solver.egg-info/top_level.txt
