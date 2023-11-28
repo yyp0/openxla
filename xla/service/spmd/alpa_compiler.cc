@@ -177,6 +177,7 @@ Status RunAutoShardingPass(HloModule* hlo_module /*,
       spmd_simplify.AddPass<HloDCE>();
 
       spmd_pipeline.AddPass<HloConstantSplitter>();
+      spmd_simplify.AddPass<HloDCE>();
 
       spmd_pipeline.AddPass<AutoSharding>();
       

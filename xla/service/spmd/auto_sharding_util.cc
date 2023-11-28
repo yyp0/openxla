@@ -337,6 +337,7 @@ InstructionBatchDimMap BuildInstructionBatchDimMap(
       case HloOpcode::kIota:
       case HloOpcode::kRngGetAndUpdateState:
       case HloOpcode::kRng:
+      case HloOpcode::kRngBitGenerator: // Walkround for alpa.
         break;
       case HloOpcode::kBroadcast: {
         const HloInstruction* operand = ins->operand(0);

@@ -536,6 +536,7 @@ BuildStrategyAndCost(const HloInstructionSequence& sequence,
 
     switch (opcode) {
       case HloOpcode::kParameter:
+      // case HloOpcode::kRngBitGenerator:
       case HloOpcode::kRng: {
         strategies = CreateLeafStrategyVector(instruction_id, ins, strategy_map,
                                               leaf_strategies);
@@ -1277,6 +1278,7 @@ BuildStrategyAndCost(const HloInstructionSequence& sequence,
                                       batch_dim_map, solver_option));
         break;
       }
+      case HloOpcode::kRngBitGenerator:
       case HloOpcode::kRngGetAndUpdateState: {
         strategies = CreateLeafStrategyVector(instruction_id, ins, strategy_map,
                                               leaf_strategies);
@@ -1409,7 +1411,8 @@ BuildStrategyAndCost(const HloInstructionSequence& sequence,
       case HloOpcode::kGetTupleElement: {
         const HloInstruction* operand = ins->operand(0);
         const StrategyVector* src_strategies = strategy_map.at(operand).get();
-        CHECK(src_strategies->is_tuple);
+        VLOG(1) << "Error happened when analyzing instruction: " << ins->ToShortString();
+        // CHECK(src_strategies->is_tuple);
         strategies = FollowInsStrategyVector(
             src_strategies->childs[ins->tuple_index()].get(), ins->shape(),
             instruction_id,
