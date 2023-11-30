@@ -7,6 +7,8 @@
 #include "xla/service/hlo_ordering.h"
 #include "xla/hlo/utils/hlo_sharding_util.h"  // new
 #include "xla/service/spmd/auto_sharding_strategy.h" // new
+// Support for sharding custom-call removing.
+#include "xla/service/sharding_propagation.h"
 
 namespace xla {
 namespace spmd {
@@ -2195,6 +2197,15 @@ StatusOr<bool> AutoSharding::Run(
   // std::cerr << "===== Enter AutoSharding =====" << std::endl;
   // std::cerr << module->ToString();
   // std::cerr << "=====================================" << std::endl;
+
+  // Remove CustomCalls with custom_call_target="Sharding" and move their
+  // shardings to their input ops.
+  absl::flat_hash_map<const HloInstruction*, std::vector<int64_t>>
+      unspecified_dims;
+  auto status_or_changed = ProcessShardingInstruction(
+      module, execution_threads, /*replace_sharding_with_copy=*/true,
+      &unspecified_dims, /*saved_root_shardings=*/nullptr,
+      /*saved_parameter_shardings=*/nullptr);
 
   // ----- Pre-process to normalize the dot dimensions -----
   TF_ASSIGN_OR_RETURN(bool changed, NormalizeDotDimension(module));

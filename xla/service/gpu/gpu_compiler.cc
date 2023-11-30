@@ -404,20 +404,20 @@ Status GpuCompiler::OptimizeHloModule(HloModule* hlo_module,
 
   SetInstructionMetadata(hlo_module);
 
-  // Test auto sharding at the beginning.
-  {
-    // VLOG(1) << "Start auto sharding pass.";
-    // // Hardcode spmd partitioning temporarily.
-    // hlo_module->config().set_use_spmd_partitioning(true);
-    // hlo_module->config().set_num_partitions(8);
+  // // Test auto sharding at the beginning.
+  // {
+  //   VLOG(1) << "Start auto sharding pass.";
+  //   // Hardcode spmd partitioning temporarily.
+  //   hlo_module->config().set_use_spmd_partitioning(true);
+  //   hlo_module->config().set_num_partitions(8);
 
-    // VLOG(1) << "Execute RunAutoShardingPass in gpu_compiler.";
-    // TF_RETURN_IF_ERROR(xla::spmd::RunAutoShardingPass(hlo_module));
-    // VLOG(2) << "Execute RunSpmdPartitionerPass in gpu_compiler.";
-    // TF_RETURN_IF_ERROR(xla::spmd::RunSpmdPartitionerPass(hlo_module));
+  //   VLOG(1) << "Execute RunAutoShardingPass in gpu_compiler.";
+  //   TF_RETURN_IF_ERROR(xla::spmd::RunAutoShardingPass(hlo_module));
+  //   VLOG(2) << "Execute RunSpmdPartitionerPass in gpu_compiler.";
+  //   TF_RETURN_IF_ERROR(xla::spmd::RunSpmdPartitionerPass(hlo_module));
    
-    // VLOG(1) << "Finish alpa auto sharding.";
-  }
+  //   VLOG(1) << "Finish alpa auto sharding.";
+  // }
 
 
   HloPassPipeline pre_spmd_pipeline("pre-spmd-partitioner");

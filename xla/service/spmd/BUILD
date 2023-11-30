@@ -234,6 +234,7 @@ cc_library(
         "//xla/hlo/utils:hlo_live_range",
         "//xla/service:hlo_memory_scheduler",
         "//xla/service:hlo_pass",
+        "//xla/service:sharding_propagation",
         "//xla/hlo/utils:hlo_sharding_util",
         "//xla/service:pass_context",
         "@pybind11",
