@@ -405,19 +405,19 @@ Status GpuCompiler::OptimizeHloModule(HloModule* hlo_module,
   SetInstructionMetadata(hlo_module);
 
   // Test auto sharding at the beginning.
-  {
-    VLOG(1) << "Start auto sharding pass.";
-    // Hardcode spmd partitioning temporarily.
-    hlo_module->config().set_use_spmd_partitioning(true);
-    hlo_module->config().set_num_partitions(8);
+  // {
+  //   VLOG(1) << "Start auto sharding pass.";
+  //   // Hardcode spmd partitioning temporarily.
+  //   hlo_module->config().set_use_spmd_partitioning(true);
+  //   hlo_module->config().set_num_partitions(8);
 
-    VLOG(1) << "Execute RunAutoShardingPass in gpu_compiler.";
-    TF_RETURN_IF_ERROR(xla::spmd::RunAutoShardingPass(hlo_module));
-    VLOG(2) << "Execute RunSpmdPartitionerPass in gpu_compiler.";
-    TF_RETURN_IF_ERROR(xla::spmd::RunSpmdPartitionerPass(hlo_module));
+  //   VLOG(1) << "Execute RunAutoShardingPass in gpu_compiler.";
+  //   TF_RETURN_IF_ERROR(xla::spmd::RunAutoShardingPass(hlo_module));
+  //   VLOG(2) << "Execute RunSpmdPartitionerPass in gpu_compiler.";
+  //   TF_RETURN_IF_ERROR(xla::spmd::RunSpmdPartitionerPass(hlo_module));
    
-    VLOG(1) << "Finish alpa auto sharding.";
-  }
+  //   VLOG(1) << "Finish alpa auto sharding.";
+  // }
 
 
   HloPassPipeline pre_spmd_pipeline("pre-spmd-partitioner");
@@ -437,6 +437,10 @@ Status GpuCompiler::OptimizeHloModule(HloModule* hlo_module,
       [](const HloSortInstruction*, int64_t) { return true; });
 
   TF_RETURN_IF_ERROR(pre_spmd_pipeline.Run(hlo_module).status());
+
+  // Hardcode partition information.
+  hlo_module->config().set_use_spmd_partitioning(true);
+  hlo_module->config().set_num_partitions(8);
 
   const int64_t num_partitions = hlo_module->config().num_partitions();
   bool auto_sharding = hlo_module->config().use_auto_spmd_partitioning();
@@ -509,12 +513,12 @@ Status GpuCompiler::OptimizeHloModule(HloModule* hlo_module,
 #endif  // PLATFORM_GOOGLE
 
     // Ingore propagation after mark sharding to avoid repeatly communication insertion.
-    // spmd_pipeline.AddPass<ShardingPropagation>(
-    //     /*is_spmd=*/true, /*propagate_metadata=*/false,
-    //     hlo_module->config().allow_spmd_sharding_propagation_to_output());
-    // spmd_pipeline.AddPass<spmd::StatefulRngSpmdPartitioner>(
-    //     num_partitions, hlo_module->config().replica_count());
-    // spmd_pipeline.AddPass<CollectivePermuteMotion>();
+    spmd_pipeline.AddPass<ShardingPropagation>(
+        /*is_spmd=*/true, /*propagate_metadata=*/false,
+        hlo_module->config().allow_spmd_sharding_propagation_to_output());
+    spmd_pipeline.AddPass<spmd::StatefulRngSpmdPartitioner>(
+        num_partitions, hlo_module->config().replica_count());
+    spmd_pipeline.AddPass<CollectivePermuteMotion>();
     TF_RETURN_IF_ERROR(spmd_pipeline.Run(hlo_module).status());
   } else {
     HloPassPipeline sharding_removal_pipeline("sharding-removal");

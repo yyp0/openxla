@@ -1228,15 +1228,16 @@ StatusOr<HloInstructionSequence> DefaultMemoryScheduler(
     const absl::flat_hash_map<const HloComputation*, int64_t>&
         memory_by_computation,
     const MemorySchedulerPostprocessor& postprocessor, int64_t* peak_memory) {
+  // Temporarily ignore when test alpa.
   // Support optimization with interger linea program method in full graph mode.
-  int64_t solver_memory;
-  TF_ASSIGN_OR_RETURN(
-      HloInstructionSequence solver_sequence,
-      RoamMemoryScheduler(computation, points_to_analysis, alias_analysis,
-                          size_function, memory_by_computation, postprocessor,
-                          &solver_memory));
+  int64_t solver_memory = INT_MAX;
+  // TF_ASSIGN_OR_RETURN(
+  //     HloInstructionSequence solver_sequence,
+  //     RoamMemoryScheduler(computation, points_to_analysis, alias_analysis,
+  //                         size_function, memory_by_computation, postprocessor,
+  //                         &solver_memory));
 
-  VLOG(1) << "Min-memory solver(full graph) sequence: " << HumanReadableNumBytes(solver_memory);
+  // VLOG(1) << "Min-memory solver(full graph) sequence: " << HumanReadableNumBytes(solver_memory);
 
   // We try a few schedulers and choose whichever returns a lower min-memory,
   // not accounting for fragmentation.
@@ -1277,6 +1278,8 @@ StatusOr<HloInstructionSequence> DefaultMemoryScheduler(
   }
 
   if (min_memory == solver_memory) {
+    // Hardcode walkround for alpa test.
+    HloInstructionSequence solver_sequence;
     VLOG(1) << "Chose min-memory solver sequence: "
             << HumanReadableNumBytes(solver_memory);
     return solver_sequence;
