@@ -596,6 +596,10 @@ InstructionBatchDimMap BuildInstructionBatchDimMap(
       case HloOpcode::kTuple:
       case HloOpcode::kCustomCall:
       case HloOpcode::kOptimizationBarrier:
+      // Test.
+      case HloOpcode::kBatchNormTraining:
+      case HloOpcode::kBatchNormGrad:
+      case HloOpcode::kBatchNormInference:
         break;
       case HloOpcode::kWhile:
         break;

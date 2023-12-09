@@ -72,6 +72,22 @@ bool IsRemovableWhile(HloInstruction* instruction,
   std::vector<HloInstruction*> dead_roots;
   for (auto* instruction : computation->instructions()) {
     auto maybe_collective_op = DynCast<HloCollectiveInstruction>(instruction);
+    auto ins_name = instruction->name();
+    if (ins_name.find("get-tuple-element") != std::string::npos) {
+      VLOG(1) << instruction->ToShortString() << " "
+              << instruction->IsDead() << " "
+              << computation->IsSafelyRemovable(instruction) << " "
+              << instruction->IsCustomCall("Sharding") << " "
+              << instruction->operand(0)->IsRoot() << " "
+              << instruction->operand(0)->user_count() << " "
+              << instruction->HasSideEffect() << " "
+              << remove_cross_partition_collective_ops << " "
+              << maybe_collective_op << " "
+              << maybe_collective_op->constrain_layout() << " "
+              << IsRemovableWhile(instruction,
+                  remove_cross_partition_collective_ops);
+    }
+
     if (instruction->IsDead() && computation->IsSafelyRemovable(instruction) &&
         (!instruction->IsCustomCall("Sharding") ||
          (!instruction->operand(0)->IsRoot() &&

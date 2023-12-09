@@ -483,6 +483,23 @@ Status GpuCompiler::OptimizeHloModule(HloModule* hlo_module,
     spmd_pipeline.AddPass<HloConstantSplitter>();
     spmd_simplify.AddPass<HloDCE>();
 
+    // Auto sharding by ALPA.
+    {
+      VLOG(1) << "Start auto sharding pass.";
+      // Hardcode spmd partitioning temporarily.
+      hlo_module->config().set_use_spmd_partitioning(true);
+      hlo_module->config().set_num_partitions(8);
+
+      VLOG(1) << "Execute RunAutoShardingPass in gpu_compiler.";
+      // TF_RETURN_IF_ERROR(xla::spmd::RunAutoShardingPass(hlo_module));
+      TF_RETURN_IF_ERROR(xla::spmd::RunAutoShardingPass(hlo_module, spmd_pipeline));
+
+      VLOG(2) << "Execute RunSpmdPartitionerPass in gpu_compiler.";
+      // TF_RETURN_IF_ERROR(xla::spmd::RunSpmdPartitionerPass(hlo_module));
+      TF_RETURN_IF_ERROR(xla::spmd::RunSpmdPartitionerPass(hlo_module, spmd_pipeline));
+      VLOG(1) << "Finish alpa auto sharding.";
+    }
+
 #ifdef PLATFORM_GOOGLE
     if (auto_sharding) {
       AutoShardingOption option;

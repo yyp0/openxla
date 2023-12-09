@@ -8415,6 +8415,7 @@ Status AlgebraicSimplifierVisitor::HandleMap(HloInstruction* map) {
 StatusOr<bool> AlgebraicSimplifier::Run(
     HloModule* module,
     const absl::flat_hash_set<absl::string_view>& execution_threads) {
+  VLOG(1) << "Run AlgebraicSimplifier pass.";
   bool changed = false;
   AlgebraicSimplifierVisitor visitor(options_, this);
   for (auto* comp : module->MakeNonfusionComputations(execution_threads)) {

@@ -533,12 +533,13 @@ BuildStrategyAndCost(const HloInstructionSequence& sequence,
   for (size_t instruction_id = 0; instruction_id < instructions.size();
        ++instruction_id) {
     const HloInstruction* ins = instructions[instruction_id];
+    VLOG(1) << "Auto sharding dealing with instruction: " << ins->ToShortString();
     std::unique_ptr<StrategyVector> strategies;
     HloOpcode opcode = ins->opcode();
 
     switch (opcode) {
       case HloOpcode::kParameter:
-      // case HloOpcode::kRngBitGenerator:
+      case HloOpcode::kRngBitGenerator:
       case HloOpcode::kRng: {
         strategies = CreateLeafStrategyVector(instruction_id, ins, strategy_map,
                                               leaf_strategies);
@@ -1280,7 +1281,7 @@ BuildStrategyAndCost(const HloInstructionSequence& sequence,
                                       batch_dim_map, solver_option));
         break;
       }
-      case HloOpcode::kRngBitGenerator:
+      // case HloOpcode::kRngBitGenerator:
       case HloOpcode::kRngGetAndUpdateState: {
         strategies = CreateLeafStrategyVector(instruction_id, ins, strategy_map,
                                               leaf_strategies);
@@ -1413,12 +1414,13 @@ BuildStrategyAndCost(const HloInstructionSequence& sequence,
       case HloOpcode::kGetTupleElement: {
         const HloInstruction* operand = ins->operand(0);
         const StrategyVector* src_strategies = strategy_map.at(operand).get();
-        VLOG(1) << "Error happened when analyzing instruction: " << ins->ToShortString();
-        // CHECK(src_strategies->is_tuple);
+        // VLOG(1) << "Error happened when analyzing instruction: " << ins->ToShortString();
+        CHECK(src_strategies->is_tuple);
         strategies = FollowInsStrategyVector(
             src_strategies->childs[ins->tuple_index()].get(), ins->shape(),
             instruction_id,
             /* have_memory_cost= */ false, leaf_strategies);
+        VLOG(1) << "Error 2 in auto_sharding.cc";
         break;
       }
       case HloOpcode::kOptimizationBarrier:
@@ -2140,6 +2142,8 @@ StatusOr<bool> AutoSharding::Run(
   if (!pass_context::GetBool("auto_sharding::enable", true)) {
     return false;
   }
+
+  VLOG(1) << "Run auto sharding pass.";
 
   // ----- Read options of this pass -----
   AutoShardingSolverOption solver_option;
