@@ -134,7 +134,15 @@ std::unique_ptr<StrategyVector> FollowInsStrategyVector(
     size_t instruction_id, bool have_memory_cost,
     LeafStrategies& leaf_strategies) {
   std::unique_ptr<StrategyVector> strategies;
+
+  VLOG(1) << "Shape to string: " << shape.ToString()
+          << " is tuple: " << src_strategies->is_tuple
+          << " is array: " << shape.IsArray();
+
   if (src_strategies->is_tuple) {
+    VLOG(1) << "Shape tostring: " << shape.ToString()
+            << " shape.tuple_shapes_size(): " << shape.tuple_shapes_size()
+            << " src_strategies->childs.size(): " << src_strategies->childs.size();
     CHECK(shape.IsTuple());
     CHECK_EQ(shape.tuple_shapes_size(), src_strategies->childs.size());
     strategies = CreateTupleStrategyVector(instruction_id);
@@ -146,23 +154,38 @@ std::unique_ptr<StrategyVector> FollowInsStrategyVector(
     }
   } else {
     CHECK(shape.IsArray());
+    VLOG(1) << "157";
     strategies = absl::make_unique<StrategyVector>();
+    VLOG(1) << "159";
     strategies->is_tuple = false;
+    VLOG(1) << "161";
     strategies->id = leaf_strategies.size();
+    VLOG(1) << "163";
     leaf_strategies.push_back(strategies.get());
+    VLOG(1) << "165";
     strategies->instruction_id = instruction_id;
+    VLOG(1) << "167";
     strategies->in_nodes.push_back(src_strategies);
+    VLOG(1) << "169";
     strategies->following = src_strategies;
+    VLOG(1) << "171";
     strategies->leaf_vector.reserve(src_strategies->leaf_vector.size());
+    VLOG(1) << "173";
     for (int64_t sid = 0; sid < src_strategies->leaf_vector.size(); ++sid) {
+    VLOG(1) << "175";
       HloSharding output_spec =
           src_strategies->leaf_vector[sid].output_sharding;
+    VLOG(1) << "178";
       std::string name = ToStringSimple(output_spec);
+    VLOG(1) << "180";
       double compute_cost = 0, communication_cost = 0;
+    VLOG(1) << "182";
       double memory_cost =
           have_memory_cost ? GetBytes(shape) / output_spec.NumTiles() : 0;
+    VLOG(1) << "185";
       std::vector<std::vector<double>> resharding_costs = {
           FollowInsCostVector(src_strategies->leaf_vector.size(), sid)};
+    VLOG(1) << "188";
       strategies->leaf_vector.push_back(
           ShardingStrategy({name,
                             output_spec,
@@ -539,7 +562,7 @@ BuildStrategyAndCost(const HloInstructionSequence& sequence,
 
     switch (opcode) {
       case HloOpcode::kParameter:
-      case HloOpcode::kRngBitGenerator:
+      // case HloOpcode::kRngBitGenerator:
       case HloOpcode::kRng: {
         strategies = CreateLeafStrategyVector(instruction_id, ins, strategy_map,
                                               leaf_strategies);
@@ -886,6 +909,8 @@ BuildStrategyAndCost(const HloInstructionSequence& sequence,
 
             CHECK_LT(operand_dim, ins->operand(0)->shape().rank())
                 << "Does not support this kind of Gather.";
+            VLOG(1) << "ins->shape(): " << ins->shape().ToString()
+                    << " ins->operand(0)->shape(): " << ins->operand(0)->shape().ToString();
             CHECK_EQ(ins->shape().dimensions(operand_dim),
                      ins->operand(0)->shape().dimensions(operand_dim))
                 << "Does not support this kind of Gather.";
@@ -1397,6 +1422,25 @@ BuildStrategyAndCost(const HloInstructionSequence& sequence,
 
         break;
       }
+      case HloOpcode::kRngBitGenerator:
+      {
+        strategies = CreateTupleStrategyVector(instruction_id);
+        strategies->childs.reserve(ins->operand_count());
+        for (size_t i = 0; i < ins->operand_count(); ++i) {
+          const HloInstruction* operand = ins->operand(i);
+          VLOG(1) << "Operand " << i << ": " << operand->ToShortString();
+          const StrategyVector* src_strategies = strategy_map.at(operand).get();
+          strategies->childs.push_back(FollowInsStrategyVector(
+              src_strategies, operand->shape(), instruction_id,
+              /* have_memory_cost= */ false, leaf_strategies));
+          RemoveIndivisibleStrategies(strategies->childs.back(),
+                                      operand->shape());
+        }
+
+        VLOG(1) << "Finish kRngBitGenerator: " << ins->ToShortString()
+                << " The operand strategy number is: " << strategies->childs.size();
+        break;
+      }
       case HloOpcode::kTuple: {
         strategies = CreateTupleStrategyVector(instruction_id);
         strategies->childs.reserve(ins->operand_count());
@@ -1409,15 +1453,27 @@ BuildStrategyAndCost(const HloInstructionSequence& sequence,
           RemoveIndivisibleStrategies(strategies->childs.back(),
                                       operand->shape());
         }
+        VLOG(1) << "Finish tuple instruction: " << ins->ToShortString();
         break;
       }
       case HloOpcode::kGetTupleElement: {
         const HloInstruction* operand = ins->operand(0);
+        VLOG(1) << "GetTupleElement operand: " << operand->ToShortString();
         const StrategyVector* src_strategies = strategy_map.at(operand).get();
         // VLOG(1) << "Error happened when analyzing instruction: " << ins->ToShortString();
+        VLOG(1) << "strategyVector information: "
+                << src_strategies->is_tuple << " "
+                << src_strategies->id << " "
+                << ins->tuple_index() << " "
+                << src_strategies->childs.size();
         CHECK(src_strategies->is_tuple);
+        size_t tuple_index = ins->tuple_index();
+        if (operand->opcode() == HloOpcode::kRngBitGenerator) {
+          tuple_index = 0;
+        }
         strategies = FollowInsStrategyVector(
-            src_strategies->childs[ins->tuple_index()].get(), ins->shape(),
+            // src_strategies->childs[ins->tuple_index()].get(), ins->shape(),
+            src_strategies->childs[tuple_index].get(), ins->shape(),
             instruction_id,
             /* have_memory_cost= */ false, leaf_strategies);
         VLOG(1) << "Error 2 in auto_sharding.cc";
