@@ -16,10 +16,11 @@ absl::flat_hash_map<std::string, absl::any> current_context;
 
 void HardcodeMesh() {
   VLOG(2) << "Hardcode mesh information.";
-  std::vector<int64_t> device_mesh_ids = {0, 1, 2, 3, 4, 5, 6, 7};
+  // std::vector<int64_t> device_mesh_ids = {0, 1, 2, 3, 4, 5, 6, 7};
+  std::vector<int64_t> device_mesh_ids = {0, 1};
   current_context["auto_sharding::device_mesh_ids"] = absl::any(std::move(device_mesh_ids));
   
-  std::vector<int64_t> device_mesh_shape = {8, 1};
+  std::vector<int64_t> device_mesh_shape = {2, 1};
   current_context["auto_sharding::device_mesh_shape"] = absl::any(std::move(device_mesh_shape));
 
   std::vector<double> device_mesh_alpha = {1.0, 1.0};

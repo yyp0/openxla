@@ -439,8 +439,8 @@ Status GpuCompiler::OptimizeHloModule(HloModule* hlo_module,
   TF_RETURN_IF_ERROR(pre_spmd_pipeline.Run(hlo_module).status());
 
   // Hardcode partition information.
-  hlo_module->config().set_use_spmd_partitioning(true);
-  hlo_module->config().set_num_partitions(8);
+  // hlo_module->config().set_use_spmd_partitioning(true);
+  // hlo_module->config().set_num_partitions(8);
 
   const int64_t num_partitions = hlo_module->config().num_partitions();
   bool auto_sharding = hlo_module->config().use_auto_spmd_partitioning();
@@ -488,7 +488,7 @@ Status GpuCompiler::OptimizeHloModule(HloModule* hlo_module,
       VLOG(1) << "Start auto sharding pass.";
       // Hardcode spmd partitioning temporarily.
       hlo_module->config().set_use_spmd_partitioning(true);
-      hlo_module->config().set_num_partitions(8);
+      hlo_module->config().set_num_partitions(2);
 
       VLOG(1) << "Execute RunAutoShardingPass in gpu_compiler.";
       // TF_RETURN_IF_ERROR(xla::spmd::RunAutoShardingPass(hlo_module));

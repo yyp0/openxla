@@ -2833,6 +2833,8 @@ Status ShardingPropagation::CanonicalizeLayouts(HloModule* module) {
 StatusOr<bool> ShardingPropagation::Run(
     HloModule* module,
     const absl::flat_hash_set<absl::string_view>& execution_threads) {
+  VLOG(1) << "Run ShardingPropagation Pass";
+
   std::optional<absl::flat_hash_map<const HloInstruction*, HloSharding>>
       original_sharding;
   bool any_changed = false;

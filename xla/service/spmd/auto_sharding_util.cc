@@ -1892,6 +1892,9 @@ std::pair<std::vector<int>, int> GetTensorDimToMeshDimInternal(
   // const Array<int64_t>& tile_assignment = spec.tile_assignment();
   TileAssignment tile_assignment = spec.tile_assignment();
 
+  VLOG(1) << "Shape: " << shape.ToString()
+          << " tile_assignment: " << tile_assignment.ToString();
+
   // Extract all tile dims
   std::vector<int> tile_dims;
   for (int i = 0; i < tile_assignment.num_dimensions(); i++) {
@@ -1923,8 +1926,9 @@ std::pair<std::vector<int>, int> GetTensorDimToMeshDimInternal(
   std::vector<int> tile_dims_rank(tile_dims.size());
   for (int i = 0; i < tile_dims.size(); ++i) {
     tile_dims_rank[tile_dims_argsort[i]] = i;
+    VLOG(1) << "tile_dims_rank[" << tile_dims_argsort[i] << "] = " << i;
   }
-
+  
   // Map tensor dims to mesh dims
   std::vector<int> ret(shape.rank(), -1);
   int ct = 0;
@@ -1932,6 +1936,10 @@ std::pair<std::vector<int>, int> GetTensorDimToMeshDimInternal(
     if (tile_assignment.dim(i) == 1) {
       ret[i] = -1;
     } else {
+      if (ct >= tile_dims_rank.size()) {
+        VLOG(1) << "ct is greater than tile_dims_rank.size: "
+                << ct << " vs " << tile_dims_rank.size();
+      }
       ret[i] = tile_dims_rank[ct++];
     }
   }

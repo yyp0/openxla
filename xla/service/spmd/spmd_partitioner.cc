@@ -59,6 +59,8 @@ limitations under the License.
 #include "xla/xla_data.pb.h"
 #include "tsl/platform/statusor.h"
 
+#include "xla/service/dump.h"
+
 namespace xla {
 namespace spmd {
 
@@ -5027,6 +5029,7 @@ std::unique_ptr<SpmdPartitioningVisitor> SpmdPartitioner::CreateVisitor(
 StatusOr<bool> SpmdPartitioner::Run(
     HloModule* module,
     const absl::flat_hash_set<absl::string_view>& execution_threads) {
+  DumpHloModuleIfEnabled(*module, "before_run_spmd_partitioner");
   TF_RETURN_IF_ERROR(PreprocessSharding(module, execution_threads));
   TF_RETURN_IF_ERROR(PreprocessHlos(module, execution_threads));
 
