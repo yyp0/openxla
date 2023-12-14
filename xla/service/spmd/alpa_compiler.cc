@@ -126,7 +126,7 @@ Status RunAutoShardingPass(HloModule* hlo_module, HloPassPipeline& spmd_pipeline
   hlo_module->set_config(module_config);
   */
   
-  DumpHloModuleIfEnabled(*hlo_module, kBeforeAutoShardingDumpName);
+  // DumpHloModuleIfEnabled(*hlo_module, kBeforeAutoShardingDumpName);
 
   // TODO(yonghao): TF Profiler Traceme
   const DebugOptions& debug_options = hlo_module->config().debug_options();
@@ -206,18 +206,18 @@ Status RunSpmdPartitionerPass(HloModule* hlo_module, HloPassPipeline& spmd_pipel
   hlo_module->set_config(module_config);
   */
 
-  DumpHloModuleIfEnabled(*hlo_module, kBeforeSpmdPartitionDumpName);
+  // DumpHloModuleIfEnabled(*hlo_module, kBeforeSpmdPartitionDumpName);
 
   // TODO(yonghao): TF Profiler Traceme
   if (hlo_module->config().use_spmd_partitioning()) {
     // HloPassPipeline spmd_pipeline("run-spmd-partitioner");
     const int64_t num_partitions = hlo_module->config().num_partitions();
     if (num_partitions > 1) {
-      spmd_pipeline.AddPass<ShardingPropagation>(
-          /*is_spmd=*/true, /*propagate_metadata=*/false);
+      // spmd_pipeline.AddPass<ShardingPropagation>(
+      //     /*is_spmd=*/true, /*propagate_metadata=*/false);
           // /*allow_spmd_sharding_propagation_to_output=*/absl::Span<const bool>({true}, 1));
-      spmd_pipeline.AddPass<StatefulRngSpmdPartitioner>(
-          num_partitions, hlo_module->config().replica_count());
+      // spmd_pipeline.AddPass<StatefulRngSpmdPartitioner>(
+      //     num_partitions, hlo_module->config().replica_count());
       spmd_pipeline.AddPass<RedundantSliceEliminator>();
       spmd_pipeline.AddPass<AllReduceReassociate>();
       spmd_pipeline.AddPass<GradAccRewrite>();
@@ -229,7 +229,7 @@ Status RunSpmdPartitionerPass(HloModule* hlo_module, HloPassPipeline& spmd_pipel
     // TF_RETURN_IF_ERROR(spmd_pipeline.Run(hlo_module).status());
   }
 
-  DumpHloModuleIfEnabled(*hlo_module, kAfterSpmdPartitionDumpName);
+  // DumpHloModuleIfEnabled(*hlo_module, kAfterSpmdPartitionDumpName);
   return OkStatus();
 }
 

@@ -1230,7 +1230,7 @@ StatusOr<HloInstructionSequence> DefaultMemoryScheduler(
     const MemorySchedulerPostprocessor& postprocessor, int64_t* peak_memory) {
   // Temporarily ignore when test alpa.
   // Support optimization with interger linea program method in full graph mode.
-  int64_t solver_memory = INT_MAX;
+  // int64_t solver_memory = INT_MAX;
   // TF_ASSIGN_OR_RETURN(
   //     HloInstructionSequence solver_sequence,
   //     RoamMemoryScheduler(computation, points_to_analysis, alias_analysis,
@@ -1272,11 +1272,12 @@ StatusOr<HloInstructionSequence> DefaultMemoryScheduler(
   VLOG(1) << "Min-memory post order sequence: "
           << HumanReadableNumBytes(post_order_memory);
 
-  auto min_memory = std::min({dfs_memory, post_order_memory, list_memory, solver_memory});
+  auto min_memory = std::min({dfs_memory, post_order_memory, list_memory}); //, solver_memory});
   if (peak_memory) {
     *peak_memory = min_memory;
   }
 
+  /*
   if (min_memory == solver_memory) {
     // Hardcode walkround for alpa test.
     HloInstructionSequence solver_sequence;
@@ -1284,7 +1285,8 @@ StatusOr<HloInstructionSequence> DefaultMemoryScheduler(
             << HumanReadableNumBytes(solver_memory);
     return solver_sequence;
   }
-  else if (min_memory == list_memory) {
+  else */
+  if (min_memory == list_memory) {
     VLOG(1) << "Chose min-memory list sequence: "
             << HumanReadableNumBytes(list_memory);
     return list_sequence;

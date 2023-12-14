@@ -264,6 +264,7 @@ void EnumerateAll1DPartition(const HloInstruction* ins,
                              std::unique_ptr<StrategyVector>& strategies,
                              bool only_allow_divisible,
                              const std::string& suffix) {
+  only_allow_divisible = true;
   // Split one dim
   for (int64_t i = 0; i < ins->shape().rank(); ++i) {
     for (int64_t j = 0; j < device_mesh.num_dimensions(); ++j) {
@@ -313,6 +314,7 @@ void EnumerateAll2DPartition(const HloInstruction* ins,
                              const StrategyMap& strategy_map,
                              std::unique_ptr<StrategyVector>& strategies,
                              bool only_allow_divisible) {
+  only_allow_divisible = true;
   // Fully tile the buffer to 2-d mesh
   for (int64_t i = 0; i < ins->shape().rank(); ++i) {
     for (int64_t j = 0; j < ins->shape().rank(); ++j) {
@@ -1511,8 +1513,67 @@ BuildStrategyAndCost(const HloInstructionSequence& sequence,
         break;
       }
       case HloOpcode::kRngBitGenerator:
+      {
+        strategies = CreateTupleStrategyVector(instruction_id);
+        // HardCode the number of childs.
+        strategies->childs.reserve(2);
+        // Deal with the first output.
+        const HloInstruction* operand = ins->operand(0);
+        const StrategyVector* src_strategies = strategy_map.at(operand).get();
+        strategies->childs.push_back(std::move(FollowInsStrategyVector(
+          src_strategies, operand->shape(), instruction_id, false, 
+                          leaf_strategies)));
+
+        // Deal with the second output.
+        std::unique_ptr<StrategyVector> main_strategy = absl::make_unique<StrategyVector>();
+        main_strategy->is_tuple = false;
+        main_strategy->id = leaf_strategies.size();
+        leaf_strategies.push_back(main_strategy.get());
+        main_strategy->instruction_id = instruction_id;
+        // Generate all possible sharding specs.
+        const Shape& output_shape = ins->shape().tuple_shapes(1);
+        // Temporarily only consider split one dim.
+        for (int64_t i = 0; i < output_shape.rank(); ++i) {
+          for (int64_t j = 0; j < device_mesh.num_dimensions(); ++j) {
+            if (device_mesh.dim(j) == 1 || 
+                output_shape.dimensions(i) < device_mesh.dim(j)) {
+              continue;
+            }
+
+            if (output_shape.dimensions(i) % device_mesh.dim(j) != 0) {
+              continue;
+            }
+
+            std::string name = absl::StrFormat("S%d @ %d", i, j) + " 1d";
+            HloSharding output_spec = Tile(output_shape, {i}, {j}, device_mesh);
+            VLOG(1) << "Output_spec of " << ins->ToShortString() << " : "
+                    << output_spec.ToString();
+            // There is no communication_cost for the second output buffer is
+            // created here.
+            double compute_cost = 0, communication_cost = 0;
+            double memory_cost = GetBytes(output_shape) / output_spec.NumTiles();
+            std::vector<std::vector<double>> resharding_costs(1, 
+              std::vector<double>(1, 0.0)); 
+            VLOG(1) << "Test operand leaf_vector.size: " << src_strategies->leaf_vector.size();
+              // std::vector<double>(strategy_map.at(operand).get()->leaf_vector.size(), 0.0)); 
+
+            main_strategy->leaf_vector.push_back(
+                ShardingStrategy({name,
+                                  output_spec,
+                                  compute_cost,
+                                  communication_cost,
+                                  memory_cost,
+                                  std::move(resharding_costs),
+                                  {}}));
+          }
+        }
+
+        strategies->childs.push_back(std::move(main_strategy));
+        VLOG(1) << "Finish kRngBitGenerator: " << ins->ToShortString()
+                << " Childs size: " << strategies->childs.size();
+        break;
+      }
       case HloOpcode::kBatchNormTraining:
-      case HloOpcode::kBatchNormGrad:
       {
         strategies = CreateTupleStrategyVector(instruction_id);
         strategies->childs.reserve(ins->operand_count());
@@ -1526,9 +1587,22 @@ BuildStrategyAndCost(const HloInstructionSequence& sequence,
           RemoveIndivisibleStrategies(strategies->childs.back(),
                                       operand->shape());
         }
-
-        VLOG(1) << "Finish kRngBitGenerator: " << ins->ToShortString()
-                << " The operand strategy number is: " << strategies->childs.size();
+        break;
+      }
+      case HloOpcode::kBatchNormGrad: {
+        strategies = CreateTupleStrategyVector(instruction_id);
+        // HardCode as 3, for the output count is 3.
+        strategies->childs.reserve(3);
+        for (size_t i = 0; i < 3; ++i) {
+          const HloInstruction* operand = ins->operand(i);
+          VLOG(1) << "Operand " << i << ": " << operand->ToShortString();
+          const StrategyVector* src_strategies = strategy_map.at(operand).get();
+          strategies->childs.push_back(FollowInsStrategyVector(
+              src_strategies, operand->shape(), instruction_id,
+              /* have_memory_cost= */ false, leaf_strategies));
+          RemoveIndivisibleStrategies(strategies->childs.back(),
+                                      operand->shape());
+        }
         break;
       }
       case HloOpcode::kTuple: {
@@ -1564,16 +1638,23 @@ BuildStrategyAndCost(const HloInstructionSequence& sequence,
         // }
 
         size_t tuple_index = ins->tuple_index();
-        if (operand->opcode() == HloOpcode::kRngBitGenerator) {
-            // || operand->opcode() == HloOpcode::kBatchNormTraining) {
-          tuple_index = 0;
-        }
+        // if (operand->opcode() == HloOpcode::kRngBitGenerator) {
+        //     // || operand->opcode() == HloOpcode::kBatchNormTraining) {
+        //   tuple_index = 0;
+        // }
 
         strategies = FollowInsStrategyVector(
             // src_strategies->childs[ins->tuple_index()].get(), ins->shape(),
             src_strategies->childs[tuple_index].get(), ins->shape(),
             instruction_id,
             /* have_memory_cost= */ false, leaf_strategies);
+
+        VLOG(1) << "New strategy information: "
+                << strategies->is_tuple << " "
+                << strategies->id << " "
+                << ins->tuple_index() << " "
+                << strategies->childs.size() << " "
+                << strategies->leaf_vector.size();
         break;
       }
       case HloOpcode::kOptimizationBarrier:
@@ -2297,7 +2378,7 @@ StatusOr<bool> AutoSharding::Run(
     const absl::flat_hash_set<absl::string_view>& execution_threads) {
   // usleep(1000000*60);
 
-  DumpHloModuleIfEnabled(*module, "before_run_auto_sharding_cc");
+  // DumpHloModuleIfEnabled(*module, "before_run_auto_sharding_cc");
   if (!pass_context::GetBool("auto_sharding::enable", true)) {
     return false;
   }
@@ -2430,16 +2511,18 @@ StatusOr<bool> AutoSharding::Run(
       BuildStrategyAndCost(sequence, ins_depth_map, batch_dim_map, alias_map,
                            cluster_env, solver_option));
 
-  VLOG(1) << "Finish BuildStrategyAndCost.";
+  VLOG(1) << "Start to BuildAliasSet.";
 
   AliasSet alias_set =
       BuildAliasSet(module, alias_analysis->dataflow_analysis(), strategy_map);
   // std::cerr << PrintStrategyMap(strategy_map, sequence);
 
+  VLOG(1) << "Start to build cost_graph.";
   // ----- Build cost graph and merge unimporant nodes -----
   CostGraph cost_graph(leaf_strategies, associative_dot_pairs);
   cost_graph.Simplify();
 
+  VLOG(1) << "Start to call the ILP solver.";
   // ----- Call the ILP solver -----
   std::vector<int64_t> s_val, e_val;
   double objective = -1.0;
@@ -2456,16 +2539,21 @@ StatusOr<bool> AutoSharding::Run(
         sequence, liveness_set, ins_depth_map, strategy_map, leaf_strategies,
         cost_graph, s_val, objective);
   }
+  // DumpHloModuleIfEnabled(*module, "after_CallSolver");
 
   // ----- Substitute all-reduce with reduce-scatter -----
   if (solver_option.prefer_reduce_scatter) {
     GenerateReduceScatter(sequence, alias_map, ins_depth_map, strategy_map,
                           cost_graph, s_val, cluster_env, solver_option);
   }
+  // DumpHloModuleIfEnabled(*module, "after_GenerateReduceScatter");
 
   // ----- Set sharding for all instructions -----
   SetHloSharding(sequence, strategy_map, cost_graph, s_val, cluster_env,
                  solver_option);
+  // DumpHloModuleIfEnabled(*module, "after_SetHloSharding");
+  VLOG(1) << "Finish SetHloSharding.";
+  
 
   // std::cerr << "===== Exit AutoSharding =====" << std::endl;
   // std::cerr << module->ToString();

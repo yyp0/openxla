@@ -438,10 +438,6 @@ Status GpuCompiler::OptimizeHloModule(HloModule* hlo_module,
 
   TF_RETURN_IF_ERROR(pre_spmd_pipeline.Run(hlo_module).status());
 
-  // Hardcode partition information.
-  // hlo_module->config().set_use_spmd_partitioning(true);
-  // hlo_module->config().set_num_partitions(8);
-
   const int64_t num_partitions = hlo_module->config().num_partitions();
   bool auto_sharding = hlo_module->config().use_auto_spmd_partitioning();
 
@@ -497,7 +493,6 @@ Status GpuCompiler::OptimizeHloModule(HloModule* hlo_module,
       VLOG(2) << "Execute RunSpmdPartitionerPass in gpu_compiler.";
       // TF_RETURN_IF_ERROR(xla::spmd::RunSpmdPartitionerPass(hlo_module));
       TF_RETURN_IF_ERROR(xla::spmd::RunSpmdPartitionerPass(hlo_module, spmd_pipeline));
-      VLOG(1) << "Finish alpa auto sharding.";
     }
 
 #ifdef PLATFORM_GOOGLE
@@ -544,6 +539,8 @@ Status GpuCompiler::OptimizeHloModule(HloModule* hlo_module,
     sharding_removal_pipeline.AddPass<HloDCE>();
     TF_RETURN_IF_ERROR(sharding_removal_pipeline.Run(hlo_module).status());
   }
+
+  VLOG(1) << "Finish sharding passes.";
 
   // {
   //   VLOG(1) << "Start auto sharding pass.";
@@ -1009,6 +1006,8 @@ Status GpuCompiler::OptimizeHloModule(HloModule* hlo_module,
     TF_RETURN_IF_ERROR(pipeline.Run(hlo_module).status());
   }
 
+  VLOG(1) << "Finish all optimization pass.";
+  DumpHloModuleIfEnabled(*hlo_module, "after_all_optimization_pass");
   return OkStatus();
 }
 

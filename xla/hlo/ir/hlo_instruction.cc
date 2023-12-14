@@ -1978,10 +1978,6 @@ bool HloInstruction::HasSideEffect() const {
     const Shape& shape, absl::Span<HloInstruction* const> operands,
     absl::string_view custom_call_target, std::string opaque,
     CustomCallApiVersion api_version) {
-  if (opaque == "Sharding") {
-    VLOG(1) << "Create Sharding custom-call here!!!";
-  }
-
   return std::make_unique<HloCustomCallInstruction>(
       shape, operands, custom_call_target, std::move(opaque), api_version);
 }
@@ -1990,10 +1986,6 @@ bool HloInstruction::HasSideEffect() const {
     const Shape& shape, absl::Span<HloInstruction* const> operands,
     HloComputation* to_apply, absl::string_view custom_call_target,
     std::string opaque, CustomCallApiVersion api_version) {
-  if (opaque == "Sharding") {
-    VLOG(1) << "Create Sharding custom-call here!!!";
-  }
-
   return std::make_unique<HloCustomCallInstruction>(
       shape, operands, to_apply, custom_call_target, std::move(opaque),
       api_version);
@@ -2004,9 +1996,6 @@ bool HloInstruction::HasSideEffect() const {
     absl::Span<HloComputation* const> called_computations,
     absl::string_view custom_call_target, std::string opaque,
     CustomCallApiVersion api_version) {
-  if (opaque == "Sharding") {
-    VLOG(1) << "Create Sharding custom-call here!!!";
-  }
 
   return std::make_unique<HloCustomCallInstruction>(
       shape, operands, called_computations, custom_call_target,
@@ -2018,9 +2007,6 @@ bool HloInstruction::HasSideEffect() const {
     absl::string_view custom_call_target,
     absl::Span<const Shape> operand_shapes_with_layout, std::string opaque,
     CustomCallApiVersion api_version) {
-  if (opaque == "Sharding") {
-    VLOG(1) << "Create Sharding custom-call here!!!";
-  }
   
   return std::make_unique<HloCustomCallInstruction>(
       shape, operands, custom_call_target, std::move(opaque),

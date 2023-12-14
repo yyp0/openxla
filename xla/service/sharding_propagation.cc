@@ -26,6 +26,8 @@ limitations under the License.
 #include <string>
 #include <utility>
 #include <vector>
+#include <random>
+#include <string>
 
 #include "absl/algorithm/container.h"
 #include "absl/container/flat_hash_map.h"
@@ -53,6 +55,8 @@ limitations under the License.
 #include "tsl/platform/errors.h"
 #include "tsl/platform/logging.h"
 #include "tsl/platform/statusor.h"
+
+#include "xla/service/dump.h"
 
 namespace xla {
 namespace {
@@ -2834,6 +2838,13 @@ StatusOr<bool> ShardingPropagation::Run(
     HloModule* module,
     const absl::flat_hash_set<absl::string_view>& execution_threads) {
   VLOG(1) << "Run ShardingPropagation Pass";
+  std::random_device rd;
+  std::mt19937 gen(rd());
+  std::uniform_int_distribution<int> distribution(1, 100);
+  int randomNumber = distribution(gen);
+  std::string randomString = std::to_string(randomNumber);
+  std::string suffix1 = randomString + "_before_run_sharding_propagation";
+  // DumpHloModuleIfEnabled(*module, suffix1);
 
   std::optional<absl::flat_hash_map<const HloInstruction*, HloSharding>>
       original_sharding;
@@ -3261,6 +3272,7 @@ StatusOr<bool> ShardingPropagation::Run(
               << "\n  aggressiveness: " << aggressiveness;
       ++iterations;
     }
+
     return OkStatus();
   };
   for (int64_t aggressiveness = 0; aggressiveness < 4; ++aggressiveness) {
@@ -3346,6 +3358,8 @@ StatusOr<bool> ShardingPropagation::Run(
   }
   TF_RETURN_IF_ERROR(CanonicalizeLayouts(module));
 
+  std::string suffix2 = randomString + "_after_run_sharding_propagation";
+    // DumpHloModuleIfEnabled(*module, suffix2);
   VLOG(1) << "Sharding propagation completed after " << iterations
           << " iterations";
   return any_changed;

@@ -427,7 +427,7 @@ static std::vector<std::string> DumpHloModuleImpl(
   }
 
   auto render_graph = [&](RenderedGraphFormat format,
-                          bool show_fusion_subcomputations = false) {
+                          bool show_fusion_subcomputations = true) {
     HloRenderOptions hlo_render_options;
     hlo_render_options.show_fusion_subcomputations =
         show_fusion_subcomputations;

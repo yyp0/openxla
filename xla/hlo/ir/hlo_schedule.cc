@@ -317,6 +317,8 @@ Status HloSchedule::Verify() const {
         pos++;
       }
 
+      VLOG(1) << "HloInstructionSequence length: " << sequence(computation).size();
+
       TF_RET_CHECK(instruction_position.size() ==
                    computation->instruction_count())
           << "Schedule for computation " << computation->name() << " has "
